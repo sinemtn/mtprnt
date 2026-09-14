@@ -483,33 +483,104 @@ const ringkasanDashboard = computed(() => [
     note: "Unit aktif di customer"
   }
 ]);
-const trenKomplain = [
-  { label: "Sen", value: 8 },
-  { label: "Sel", value: 12 },
-  { label: "Rab", value: 9 },
-  { label: "Kam", value: 15 },
-  { label: "Jum", value: 13 },
-  { label: "Sab", value: 17 },
-  { label: "Min", value: 14 }
-];
-const statusKomplain = [
-  { label: "Baru", value: 35, color: "#2563eb" },
-  { label: "Proses", value: 45, color: "#22d3ee" },
-  { label: "Selesai", value: 20, color: "#10b981" }
-];
-const suratTugasMingguan = [
-  { label: "M", value: 10 },
-  { label: "S", value: 14 },
-  { label: "R", value: 8 },
-  { label: "K", value: 16 },
-  { label: "J", value: 12 },
-  { label: "S", value: 18 }
-];
-const stokBarang = [
-  { label: "Printer", value: 42, color: "#2563eb" },
-  { label: "Toner", value: 38, color: "#22d3ee" },
-  { label: "Sparepart", value: 20, color: "#8b5cf6" }
-];
+
+function angka(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function tanggalDari(item, keys) {
+  const raw = keys.map((key) => item?.[key]).find(Boolean);
+  if (!raw) return null;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function tanggalKey(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function hariTerakhir(total = 7) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Array.from({ length: total }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (total - 1 - index));
+    return date;
+  });
+}
+
+const labelHariPendek = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+const warnaStatusKomplain = {
+  new: "#2563eb",
+  pending: "#38bdf8",
+  progress: "#22d3ee",
+  solved: "#10b981",
+  cancelled: "#fb7185"
+};
+const urutanStatusKomplain = ["new", "pending", "progress", "solved", "cancelled"];
+
+const trenKomplain = computed(() => {
+  const counts = options.pengaduan.reduce((result, item) => {
+    const date = tanggalDari(item, ["tanggal_pengaduan", "tanggal_dibuat", "created_at"]);
+    if (!date) return result;
+    const key = tanggalKey(date);
+    result[key] = (result[key] || 0) + 1;
+    return result;
+  }, {});
+
+  return hariTerakhir().map((date) => ({
+    label: labelHariPendek[date.getDay()],
+    value: counts[tanggalKey(date)] || 0
+  }));
+});
+
+const statusKomplain = computed(() => {
+  const counts = options.pengaduan.reduce((result, item) => {
+    const status = item.status || "new";
+    result[status] = (result[status] || 0) + 1;
+    return result;
+  }, {});
+
+  return urutanStatusKomplain.map((status) => ({
+    label: labelStatus(status),
+    value: counts[status] || 0,
+    color: warnaStatusKomplain[status] || "#94a3b8"
+  }));
+});
+
+const suratTugasMingguan = computed(() => {
+  const counts = options.suratTugas.reduce((result, item) => {
+    const date = tanggalDari(item, ["tanggal_dibuat", "tanggal_jadwal", "created_at"]);
+    if (!date) return result;
+    const key = tanggalKey(date);
+    result[key] = (result[key] || 0) + 1;
+    return result;
+  }, {});
+
+  return hariTerakhir().map((date) => ({
+    label: labelHariPendek[date.getDay()],
+    value: counts[tanggalKey(date)] || 0
+  }));
+});
+
+const stokBarang = computed(() => [
+  {
+    label: "Printer",
+    value: (stok.printer || []).reduce((total, item) => total + angka(item.jumlah_tersedia), 0),
+    color: "#2563eb"
+  },
+  {
+    label: "Toner",
+    value: (stok.toner || []).reduce((total, item) => total + angka(item.jumlah_tersedia), 0),
+    color: "#22d3ee"
+  },
+  {
+    label: "Sparepart",
+    value: (stok.suku_cadang || []).reduce((total, item) => total + angka(item.jumlah_tersedia), 0),
+    color: "#8b5cf6"
+  }
+]);
 const stokViews = {
   stokPrinter: {
     group: "printer",
@@ -530,12 +601,26 @@ const stokViews = {
     label: "Sparepart"
   }
 };
-const teknisiBar = [
-  { label: "Andi", value: 16 },
-  { label: "Raka", value: 12 },
-  { label: "Dimas", value: 9 },
-  { label: "Bayu", value: 14 }
-];
+const teknisiBar = computed(() => {
+  const aktif = new Set(["pending", "progress", "ready_to_print", "technician_completed", "warehouse_validated"]);
+  const counts = options.suratTugas.reduce((result, surat) => {
+    if (!aktif.has(surat.status)) return result;
+    (surat.teknisi_surat_tugas || surat.teknisi || []).forEach((assignment) => {
+      const id = assignment.teknisi_id;
+      if (!id) return;
+      result[id] = (result[id] || 0) + 1;
+    });
+    return result;
+  }, {});
+
+  return options.teknisi
+    .map((teknisi) => ({
+      label: penggunaLabel(teknisi),
+      value: counts[teknisi.id] || 0
+    }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
+});
 const chartBaseOptions = {
   responsive: true,
   maintainAspectRatio: false,
@@ -566,10 +651,10 @@ const axisOptions = {
   }
 };
 const lineChartData = computed(() => ({
-  labels: trenKomplain.map((item) => item.label),
+  labels: trenKomplain.value.map((item) => item.label),
   datasets: [
     {
-      data: trenKomplain.map((item) => item.value),
+      data: trenKomplain.value.map((item) => item.value),
       borderColor: "#2563eb",
       backgroundColor: "rgba(34, 211, 238, 0.16)",
       pointBackgroundColor: "#22d3ee",
@@ -584,11 +669,11 @@ const lineChartData = computed(() => ({
   ]
 }));
 const statusDonutData = computed(() => ({
-  labels: statusKomplain.map((item) => item.label),
+  labels: statusKomplain.value.map((item) => item.label),
   datasets: [
     {
-      data: statusKomplain.map((item) => item.value),
-      backgroundColor: statusKomplain.map((item) => item.color),
+      data: statusKomplain.value.map((item) => item.value),
+      backgroundColor: statusKomplain.value.map((item) => item.color),
       borderColor: "#ffffff",
       borderWidth: 4,
       hoverOffset: 5
@@ -596,10 +681,10 @@ const statusDonutData = computed(() => ({
   ]
 }));
 const suratTugasBarData = computed(() => ({
-  labels: suratTugasMingguan.map((item) => item.label),
+  labels: suratTugasMingguan.value.map((item) => item.label),
   datasets: [
     {
-      data: suratTugasMingguan.map((item) => item.value),
+      data: suratTugasMingguan.value.map((item) => item.value),
       backgroundColor: "#2563eb",
       hoverBackgroundColor: "#22d3ee",
       borderRadius: 8,
@@ -608,11 +693,11 @@ const suratTugasBarData = computed(() => ({
   ]
 }));
 const stokDonutData = computed(() => ({
-  labels: stokBarang.map((item) => item.label),
+  labels: stokBarang.value.map((item) => item.label),
   datasets: [
     {
-      data: stokBarang.map((item) => item.value),
-      backgroundColor: stokBarang.map((item) => item.color),
+      data: stokBarang.value.map((item) => item.value),
+      backgroundColor: stokBarang.value.map((item) => item.color),
       borderColor: "#ffffff",
       borderWidth: 4,
       hoverOffset: 5
@@ -620,10 +705,10 @@ const stokDonutData = computed(() => ({
   ]
 }));
 const teknisiBarData = computed(() => ({
-  labels: teknisiBar.map((item) => item.label),
+  labels: teknisiBar.value.map((item) => item.label),
   datasets: [
     {
-      data: teknisiBar.map((item) => item.value),
+      data: teknisiBar.value.map((item) => item.value),
       backgroundColor: "#22d3ee",
       hoverBackgroundColor: "#2563eb",
       borderRadius: 8,
@@ -1659,7 +1744,7 @@ async function muatOptions() {
 
 async function muatHalaman() {
   if (activeView.value === "dashboard") {
-    await muatOptions();
+    await Promise.all([muatOptions(), muatStok(true)]);
     return;
   }
   if (["rolePermission", "slaPending"].includes(activeView.value)) {
@@ -1735,13 +1820,13 @@ async function simpanPermission() {
   }
 }
 
-async function muatStok() {
+async function muatStok(silent = false) {
   try {
     loading.value = true;
     const response = await api.get("/stok");
     Object.assign(stok, response.data.data);
   } catch (error) {
-    pesanError.value = error.response?.data?.pesan || "Stok gagal dimuat.";
+    if (!silent) pesanError.value = error.response?.data?.pesan || "Stok gagal dimuat.";
   } finally {
     loading.value = false;
   }
@@ -1790,7 +1875,7 @@ async function muatProfil() {
     const response = await api.get("/auth/saya");
     pengguna.value = response.data.data;
     statusBackend.value = "Terhubung";
-    await muatOptions();
+    await Promise.all([muatOptions(), muatStok(true)]);
   } catch (error) {
     pesanError.value = error.response?.data?.pesan || "Sesi tidak valid.";
     hapusToken();

@@ -13,6 +13,10 @@ defineProps({
   statusKomplain: { type: Array, required: true },
   stokBarang: { type: Array, required: true }
 });
+
+function chartTotal(data) {
+  return data?.datasets?.[0]?.data?.reduce((total, value) => total + Number(value || 0), 0) || 0;
+}
 </script>
 
 <template>
@@ -32,7 +36,7 @@ defineProps({
           <span>Line Chart</span>
           <h2>Tren Komplain</h2>
         </div>
-        <strong>+12%</strong>
+        <strong>{{ chartTotal(lineChartData) }}</strong>
       </div>
       <div class="chart-frame chart-frame-large">
         <Line :data="lineChartData" :options="axisOptions" />
@@ -45,7 +49,7 @@ defineProps({
           <span>Donut Chart</span>
           <h2>Status Komplain</h2>
         </div>
-        <strong>100%</strong>
+        <strong>{{ chartTotal(statusDonutData) }}</strong>
       </div>
       <div class="donut-layout">
         <div class="chart-frame donut-frame">
@@ -54,7 +58,7 @@ defineProps({
         <div class="chart-legend">
           <span v-for="item in statusKomplain" :key="item.label">
             <i :style="{ background: item.color }"></i>
-            {{ item.label }} {{ item.value }}%
+            {{ item.label }} {{ item.value }}
           </span>
         </div>
       </div>
@@ -66,7 +70,7 @@ defineProps({
           <span>Bar Chart</span>
           <h2>Surat Tugas</h2>
         </div>
-        <strong>78</strong>
+        <strong>{{ chartTotal(suratTugasBarData) }}</strong>
       </div>
       <div class="chart-frame">
         <Bar :data="suratTugasBarData" :options="axisOptions" />
@@ -79,7 +83,7 @@ defineProps({
           <span>Donut Chart</span>
           <h2>Komposisi Stok</h2>
         </div>
-        <strong>246</strong>
+        <strong>{{ chartTotal(stokDonutData) }}</strong>
       </div>
       <div class="donut-layout">
         <div class="chart-frame donut-frame">
@@ -88,7 +92,7 @@ defineProps({
         <div class="chart-legend">
           <span v-for="item in stokBarang" :key="item.label">
             <i :style="{ background: item.color }"></i>
-            {{ item.label }} {{ item.value }}%
+            {{ item.label }} {{ item.value }}
           </span>
         </div>
       </div>
@@ -100,7 +104,7 @@ defineProps({
           <span>Bar Chart</span>
           <h2>Beban Teknisi</h2>
         </div>
-        <strong>51</strong>
+        <strong>{{ chartTotal(teknisiBarData) }}</strong>
       </div>
       <div class="chart-frame">
         <Bar :data="teknisiBarData" :options="axisOptions" />
