@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: multiprint-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-multiprint}
+      POSTGRES_USER: ${POSTGRES_USER:-multiprint}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-multiprint123}
+      TZ: Asia/Bangkok
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./service/database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: multiprint-v2-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@multiprint.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin123}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      TZ: Asia/Bangkok
+    ports:
+      - "${PGADMIN_PORT:-5052}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  service:
+    build:
+      context: ./service
+    container_name: service
+    restart: unless-stopped
+    environment:
+      PORT: ${SERVICE_PORT:-5000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-multiprint}:${POSTGRES_PASSWORD:-multiprint123}@postgres:5432/${POSTGRES_DB:-multiprint}
+      JWT_SECRET: ${JWT_SECRET:-multiprint-dev-secret}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
+      TZ: Asia/Bangkok
+    ports:
+      - "${SERVICE_PORT:-5000}:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ui:
+    build:
+      context: ./ui
+    container_name: ui
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5000/api}
+      TZ: Asia/Bangkok
+    ports:
+      - "${UI_PORT:-5173}:5173"
+    depends_on:
+      - service
+
+volumes:
+  postgres_data:
+  pgadmin_data:
