@@ -27,8 +27,10 @@ import {
   LogOut,
   Menu,
   PackagePlus,
+  Pencil,
   PhoneCall,
   Plus,
+  Power,
   Printer,
   Save,
   Settings,
@@ -41,16 +43,19 @@ import {
 import logoMulti from "../assets/img/logo-multi-transparent.png";
 import api, { hapusToken } from "../services/api";
 import AuditPage from "./audit/AuditPage.vue";
+import AuditBarangPage from "./audit/AuditBarangPage.vue";
 import Complaint from "./complaint/Complaint.vue";
-import PrinterTerpasang from "./dataset/PrinterTerpasang.vue";
 import StockPrinter from "./dataset/StockPrinter.vue";
 import StockSparepart from "./dataset/StockSparepart.vue";
 import StockToner from "./dataset/StockToner.vue";
 import Dashboard from "./dashboard/Dashboard.vue";
 import Gudang from "./master-data/Gudang.vue";
-import Lokasi from "./master-data/Lokasi.vue";
-import Pelanggan from "./master-data/Pelanggan.vue";
+import LokasiCustomer from "./master-data/LokasiCustomer.vue";
+import MasterImportDialog from "./master-data/MasterImportDialog.vue";
+import Account from "./master-data/Account.vue";
 import PrinterMaster from "./master-data/Printer.vue";
+import PrinterKategori from "./master-data/PrinterKategori.vue";
+import PrinterModel from "./master-data/PrinterModel.vue";
 import Sparepart from "./master-data/Sparepart.vue";
 import Toner from "./master-data/Toner.vue";
 import User from "./master-data/User.vue";
@@ -71,12 +76,20 @@ const activeView = ref("dashboard");
 const loading = ref(false);
 const modalTerbuka = ref(false);
 const modalStokTerbuka = ref(false);
+const importKind = ref(null);
+const locationRefreshKey = ref(0);
 const konfirmasiHapusTerbuka = ref(false);
 const targetHapus = ref(null);
+const targetHapusJenis = ref("account");
 const modeKonfirmasi = ref("deactivate");
 const modeForm = ref("create");
 const formTab = ref("general");
 const form = reactive({});
+const siteRows = ref([]);
+const siteFormVisible = ref(false);
+const siteMode = ref("create");
+const siteForm = reactive({});
+const firstCustomerForm = reactive({});
 const itemForm = reactive({
   gudang_id: "",
   jenis_barang: "toner",
@@ -92,12 +105,12 @@ const stockForm = reactive({
   jenis_barang: "toner",
   item_id: "",
   jumlah: 1,
-  keterangan: "",
-  langsung_posting: true
+  keterangan: ""
 });
 const cari = ref("");
 const items = ref([]);
 const auditItems = ref([]);
+const auditBarangTarget = ref(null);
 const stok = reactive({ toner: [], printer: [], suku_cadang: [] });
 const auditFilter = reactive({
   tanggal_mulai: "",
@@ -120,10 +133,18 @@ const stokPagination = reactive({
   suku_cadang: { page: 1, pageSize: 10 }
 });
 const stokSearch = ref("");
+const printerSummary = reactive({ available: 0, reserved: 0, issued: 0, installed: 0 });
+const serverTotal = ref(0);
+const printerFilters = reactive({ kategori_id: "", model_id: "" });
+const availablePrinterOptions = ref([]);
+const printerItemSearch = ref("");
+const installedPrinterSearch = ref("");
 const options = reactive({
-  pelanggan: [],
-  lokasi: [],
+  account: [],
+  customer: [],
   printer: [],
+  printerKategori: [],
+  printerModel: [],
   toner: [],
   sukuCadang: [],
   gudang: [],
@@ -162,8 +183,7 @@ const menu = ref([
         children: [
           { key: "stokPrinter", nama: "Stok Printer", icon: Printer },
           { key: "stokToner", nama: "Stok Toner", icon: PackagePlus },
-          { key: "stokSparepart", nama: "Stok Sparepart", icon: Wrench },
-          { key: "printerTerpasang", nama: "Printer Terpasang", icon: Printer }
+          { key: "stokSparepart", nama: "Stok Sparepart", icon: Wrench }
         ]
       },
       {
@@ -171,12 +191,28 @@ const menu = ref([
         icon: Database,
         terbuka: false,
         children: [
-          { key: "pelanggan", nama: "Pelanggan", icon: Building2 },
-          { key: "lokasi", nama: "Lokasi", icon: Building2 },
-          { key: "printer", nama: "Printer", icon: Printer },
+          { key: "account", nama: "Account", icon: Building2 },
+          {
+            nama: "Printer",
+            icon: Printer,
+            terbuka: false,
+            children: [
+              { key: "printer", nama: "Unit Printer", icon: Printer },
+              { key: "printerKategori", nama: "Kategori Printer", icon: Printer },
+              { key: "printerModel", nama: "Model Printer", icon: Printer }
+            ]
+          },
           { key: "toner", nama: "Toner", icon: Boxes },
           { key: "sukuCadang", nama: "Sparepart", icon: Wrench },
-          { key: "gudang", nama: "Gudang", icon: Box },
+          {
+            nama: "Lokasi",
+            icon: Box,
+            terbuka: false,
+            children: [
+              { key: "gudang", nama: "Master Gudang", icon: Box },
+              { key: "lokasiCustomer", nama: "Lokasi Customer", icon: Building2 }
+            ]
+          },
           { key: "pengguna", nama: "User", icon: UserRound }
         ]
       }
@@ -186,6 +222,7 @@ const menu = ref([
     section: "Sistem",
     items: [
       { key: "audit", nama: "Audit", icon: History },
+      { key: "auditBarang", nama: "Audit Barang", icon: Boxes },
       {
         nama: "Pengaturan",
         icon: Settings,
@@ -207,120 +244,117 @@ const menu = ref([
 ]);
 
 const configs = {
-  pelanggan: {
-    title: "Master Pelanggan",
-    subtitle: "Kelola data pelanggan dan informasi kontak.",
-    endpoint: "/pelanggan",
+  account: {
+    title: "Account",
+    subtitle: "Kelola Account dan Customer operasional.",
+    endpoint: "/account",
     hardDelete: true,
     search: true,
+    serverPagination: true,
     columns: [
-      ["kode_pelanggan", "Kode"],
-      ["nama_pelanggan", "Nama"],
-      ["jenis_pelanggan", "Jenis"],
+      ["kode_account", "Kode"],
+      ["nama_account", "Account"],
+      ["jumlah_customer", "Customer"],
+      ["tipe_account", "Tipe"],
       ["telepon", "Telepon"],
       ["aktif", "Status"]
     ],
     fields: [
-      field("kode_pelanggan", "Kode Pelanggan", "text", true),
-      field("nama_pelanggan", "Nama Pelanggan", "text", true),
-      field("jenis_pelanggan", "Jenis", "select", false, ["single", "multisite"]),
-      field("telepon", "Telepon"),
-      field("email", "Email"),
-      field("alamat", "Alamat", "textarea"),
+      field("kode_account", "Kode Account", "text", true),
+      field("nama_account", "Nama Account", "text", true),
+      field("npwp", "NPWP"),
+      field("telepon", "Telepon Utama"),
+      field("email", "Email Utama", "email"),
+      field("alamat_penagihan", "Alamat Penagihan", "textarea"),
       field("aktif", "Aktif", "checkbox")
     ]
   },
-  lokasi: {
-    title: "Master Lokasi",
-    subtitle: "Lokasi pelanggan, alamat, dan PIC.",
-    endpoint: "/lokasi-pelanggan",
+  printerKategori: {
+    title: "Kategori Printer",
+    endpoint: "/printer-kategori",
     hardDelete: true,
     search: true,
-    columns: [
-      ["kode_lokasi", "Kode"],
-      ["nama_lokasi", "Lokasi"],
-      ["alamat", "Alamat"],
-      ["kota", "Kota"],
-      ["aktif", "Status"]
-    ],
+    serverPagination: true,
+    columns: [["kode_kategori", "Kode"], ["nama_kategori", "Kategori"], ["aktif", "Status"]],
+    fields: [field("kode_kategori", "Kode Kategori", "text", true), field("nama_kategori", "Nama Kategori", "text", true), field("aktif", "Aktif", "checkbox")]
+  },
+  printerModel: {
+    title: "Model Printer",
+    endpoint: "/printer-model",
+    hardDelete: true,
+    search: true,
+    serverPagination: true,
+    columns: [["kode_model", "Kode"], ["merek", "Merek"], ["nama_model", "Model"], ["kategori_id", "Kategori"], ["aktif", "Status"]],
     fields: [
-      relation("pelanggan_id", "Pelanggan", "pelanggan", "nama_pelanggan", true),
-      field("kode_lokasi", "Kode Lokasi", "text", true),
-      field("nama_lokasi", "Nama Lokasi", "text", true),
-      field("alamat", "Alamat", "textarea", true),
-      field("kota", "Kota"),
-      field("nama_pic", "Nama PIC"),
-      field("telepon_pic", "Telepon PIC"),
-      field("email_pic", "Email PIC"),
-      field("lokasi_default", "Default", "checkbox"),
+      relation("kategori_id", "Kategori", "printerKategori", "nama_kategori", true),
+      field("kode_model", "Kode Model", "text", true),
+      field("merek", "Merek", "text", true),
+      field("nama_model", "Nama Model", "text", true),
       field("aktif", "Aktif", "checkbox")
     ]
   },
   printer: {
     title: "Master Printer",
-    subtitle: "Model printer dan spesifikasi dasar.",
+    subtitle: "Satu baris untuk setiap unit printer.",
     endpoint: "/printer",
-    hardDelete: true,
     search: true,
+    serverPagination: true,
+    printerFilters: true,
+    printerFilterFields: ["kategori_id", "model_id"],
     columns: [
-      ["kode_printer", "Kode"],
-      ["merek", "Merek"],
-      ["model", "Model"],
-      ["jenis_printer", "Jenis"],
-      ["aktif", "Status"]
+      ["mp_no", "MP No"],
+      ["serial_number", "Serial Number"],
+      ["kategori_unit", "Kategori"],
+      ["model_unit", "Model"],
+      ["lokasi_unit", "Lokasi"],
+      ["status", "Status"]
     ],
     fields: [
-      field("kode_printer", "Kode Printer", "text", true),
-      field("merek", "Merek", "text", true),
-      field("model", "Model", "text", true),
-      field("jenis_printer", "Jenis Printer"),
+      field("mp_no", "MP No", "text", true),
+      field("serial_number", "Serial Number"),
+      relation("kategori_id", "Kategori", "printerKategori", "nama_kategori", true),
+      relation("model_id", "Model", "printerModel", "nama_model", true),
       field("keterangan", "Keterangan", "textarea"),
-      field("aktif", "Aktif", "checkbox")
+      relation("gudang_id", "Gudang Awal", "gudang", "nama_gudang", true),
     ]
   },
   toner: {
     title: "Master Toner",
-    subtitle: "Data toner, warna, merek, dan kompatibilitas.",
+    subtitle: "Data toner berdasarkan kode, warna, dan tipe.",
     endpoint: "/toner",
     hardDelete: true,
     search: true,
+    serverPagination: true,
     columns: [
       ["kode_toner", "Kode"],
       ["nama_toner", "Nama"],
       ["warna", "Warna"],
-      ["merek", "Merek"],
+      ["tipe", "Tipe"],
       ["aktif", "Status"]
     ],
     fields: [
       field("kode_toner", "Kode Toner", "text", true),
       field("nama_toner", "Nama Toner", "text", true),
-      field("warna", "Warna"),
-      field("merek", "Merek"),
-      field("model_printer_kompatibel", "Kompatibel", "textarea"),
-      field("satuan", "Satuan"),
+      field("warna", "Warna", "text", true),
+      field("tipe", "Tipe", "text", true),
       field("aktif", "Aktif", "checkbox")
     ]
   },
   sukuCadang: {
     title: "Master Sparepart",
-    subtitle: "Data suku cadang dan kategori barang.",
+    subtitle: "Data master sparepart.",
     endpoint: "/suku-cadang",
     hardDelete: true,
     search: true,
+    serverPagination: true,
     columns: [
       ["kode_suku_cadang", "Kode"],
       ["nama_suku_cadang", "Nama"],
-      ["kategori", "Kategori"],
-      ["merek", "Merek"],
       ["aktif", "Status"]
     ],
     fields: [
       field("kode_suku_cadang", "Kode Sparepart", "text", true),
       field("nama_suku_cadang", "Nama Sparepart", "text", true),
-      field("kategori", "Kategori"),
-      field("merek", "Merek"),
-      field("model_printer_kompatibel", "Kompatibel", "textarea"),
-      field("satuan", "Satuan"),
       field("aktif", "Aktif", "checkbox")
     ]
   },
@@ -330,6 +364,7 @@ const configs = {
     endpoint: "/gudang",
     hardDelete: true,
     search: true,
+    serverPagination: true,
     columns: [
       ["kode_gudang", "Kode"],
       ["nama_gudang", "Nama"],
@@ -367,31 +402,6 @@ const configs = {
       field("active", "Active", "checkbox")
     ]
   },
-  printerTerpasang: {
-    title: "Printer Terpasang",
-    subtitle: "Printer yang aktif di lokasi pelanggan.",
-    endpoint: "/printer-terpasang",
-    search: true,
-    columns: [
-      ["nomor_seri", "Nomor Seri"],
-      ["pelanggan_id", "Customer"],
-      ["lokasi_detail", "Lokasi Detail"],
-      ["status", "Status"],
-      ["meter_hitam_putih", "Meter B/W"],
-      ["meter_warna", "Meter Warna"]
-    ],
-    fields: [
-      relation("pelanggan_id", "Customer", "pelanggan", "nama_pelanggan", true),
-      relation("lokasi_pelanggan_id", "Cabang Customer", "lokasi", "nama_lokasi"),
-      relation("printer_id", "Printer", "printer", "model", true),
-      field("nomor_seri", "Nomor Seri", "text", true),
-      field("lokasi_detail", "Lokasi Detail"),
-      field("tanggal_instalasi", "Tanggal Instalasi", "date"),
-      field("meter_hitam_putih", "Meter B/W", "number"),
-      field("meter_warna", "Meter Warna", "number"),
-      field("status", "Status", "select", false, ["aktif", "nonaktif", "dipindahkan", "dikembalikan"])
-    ]
-  },
   pengaduan: {
     title: "Flow Komplain",
     subtitle: "Input, update prioritas, dan pantau status komplain.",
@@ -409,8 +419,9 @@ const configs = {
       field("nomor_pengaduan", "No. Komplain", "text", false, [], { readonly: true, placeholder: "Generate otomatis" }),
       field("tanggal_pengaduan", "Tanggal Komplain", "datetime-local", false, [], { defaultValue: "now" }),
       field("mp_no", "MP No", "text", true),
-      relation("pelanggan_id", "Customer", "pelanggan", "nama_pelanggan", true),
-      relation("lokasi_pelanggan_id", "Cabang Customer", "lokasi", "nama_lokasi"),
+      relation("account_id", "Account", "account", "nama_account", true),
+      relation("customer_id", "Customer", "customer", "nama_customer", true),
+      relation("printer_id", "Printer Terpasang (Opsional)", "printerTerpasang", "mp_no"),
       relation("sales_id", "Sales", "pengguna", "name", true),
       field("status", "Status", "select", false, ["new", "pending", "progress", "solved", "cancelled"], { defaultValue: "new" }),
       field("deskripsi_masalah", "Deskripsi", "textarea", true),
@@ -440,8 +451,9 @@ const configs = {
       field("nomor_surat_tugas", "ID Surat Tugas", "text", false, [], { readonly: true, placeholder: "Generate otomatis" }),
       relation("pengaduan_id", "No. Komplain", "pengaduan", "nomor_pengaduan"),
       field("mp_no", "MP No", "text", true),
-      relation("pelanggan_id", "Customer", "pelanggan", "nama_pelanggan", true),
-      relation("lokasi_pelanggan_id", "Cabang Customer", "lokasi", "nama_lokasi"),
+      relation("account_id", "Account", "account", "nama_account", true),
+      relation("customer_id", "Customer", "customer", "nama_customer", true),
+      relation("printer_id", "Printer Terpasang (Opsional)", "printerTerpasang", "mp_no"),
       relation("pic_teknisi_id", "PIC", "teknisi", "name", true),
       field("jenis_pekerjaan", "Tipe", "select", true, ["maintenance", "installation", "delivery", "support"], { defaultValue: "maintenance" }),
       field("status", "Status", "select", false, ["pending", "progress", "ready_to_print", "technician_completed", "warehouse_validated", "solved", "cancelled"], { defaultValue: "pending" }),
@@ -459,7 +471,7 @@ const stockItemOptions = computed(() => {
   return options.toner;
 });
 const itemSuratOptions = computed(() => {
-  if (itemForm.jenis_barang === "printer") return options.printer;
+  if (itemForm.jenis_barang === "printer") return availablePrinterOptions.value;
   if (itemForm.jenis_barang === "suku_cadang") return options.sukuCadang;
   return options.toner;
 });
@@ -479,7 +491,7 @@ const ringkasanDashboard = computed(() => [
   {
     icon: Printer,
     label: "Jumlah Printer Terpasang",
-    value: options.printerTerpasang.length,
+    value: printerSummary.installed,
     note: "Unit aktif di customer"
   }
 ]);
@@ -585,7 +597,7 @@ const stokViews = {
   stokPrinter: {
     group: "printer",
     title: "Stok Printer",
-    subtitle: "Pantau ketersediaan unit printer di setiap gudang.",
+    subtitle: "Unit printer di gudang dan di customer.",
     label: "Printer"
   },
   stokToner: {
@@ -744,6 +756,7 @@ const activeStockView = computed(() => stokViews[activeView.value]);
 const activeStockGroup = computed(() => activeStockView.value?.group);
 const isAdmin = computed(() => (pengguna.value?.role || pengguna.value?.peran) === "admin");
 const roleAktif = computed(() => normalisasiRoleFrontend(pengguna.value?.role || pengguna.value?.peran || ""));
+const canViewAuditBarang = computed(() => ["admin", "sales_admin", "kepala_teknisi", "warehouse"].includes(roleAktif.value));
 const stockPageComponents = {
   stokPrinter: StockPrinter,
   stokToner: StockToner,
@@ -752,10 +765,10 @@ const stockPageComponents = {
 const crudPageComponents = {
   pengaduan: Complaint,
   suratTugas: SuratTugas,
-  printerTerpasang: PrinterTerpasang,
-  pelanggan: Pelanggan,
-  lokasi: Lokasi,
+  account: Account,
   printer: PrinterMaster,
+  printerKategori: PrinterKategori,
+  printerModel: PrinterModel,
   toner: Toner,
   sukuCadang: Sparepart,
   gudang: Gudang,
@@ -764,6 +777,8 @@ const crudPageComponents = {
 const currentStockComponent = computed(() => stockPageComponents[activeView.value]);
 const currentCrudComponent = computed(() => crudPageComponents[activeView.value]);
 const pageTitle = computed(() => {
+  if (activeView.value === "auditBarang") return "Audit Barang";
+  if (activeView.value === "lokasiCustomer") return "Lokasi Customer";
   if (activeView.value === "audit") return "Audit Trail";
   if (activeView.value === "rolePermission") return "Role Permission";
   if (activeView.value === "slaPending") return "SLA Pending Komplain";
@@ -771,6 +786,8 @@ const pageTitle = computed(() => {
   return currentConfig.value?.title || "Ringkasan Aplikasi";
 });
 const pageSubtitle = computed(() => {
+  if (activeView.value === "auditBarang") return "Riwayat perubahan printer, toner, dan sparepart.";
+  if (activeView.value === "lokasiCustomer") return "Alamat operasional customer di setiap Account.";
   if (activeView.value === "audit") return "Filter riwayat berdasarkan tanggal, nomor komplain, atau nomor surat tugas.";
   if (activeView.value === "rolePermission") return "Atur hak akses setiap role terhadap modul aplikasi.";
   if (activeView.value === "slaPending") return "Atur batas jam komplain New otomatis menjadi Pending.";
@@ -779,15 +796,19 @@ const pageSubtitle = computed(() => {
 });
 const canCreate = computed(() => {
   if (!currentConfig.value) return false;
+  if (currentConfig.value.readOnly) return false;
   if (isAdmin.value) return true;
   if (activeView.value === "pengaduan") return roleAktif.value === "sales_admin";
   if (activeView.value === "suratTugas") return roleAktif.value === "kepala_teknisi";
   if (activeView.value === "pengguna") return false;
   return ["admin", "warehouse"].includes(roleAktif.value);
 });
+const importableMasters = ["account", "printerKategori", "printerModel", "printer", "toner", "sukuCadang", "gudang", "pengguna"];
+const canImportMaster = computed(() => importableMasters.includes(activeView.value) && (isAdmin.value || (activeView.value === "gudang" && roleAktif.value === "warehouse")));
 const formTabs = computed(() => {
   if (currentConfig.value?.flow === "pengaduan") return ["general", "suratTugas"];
   if (currentConfig.value?.flow === "suratTugas") return ["general", "item"];
+  if (activeView.value === "account" && modeForm.value === "edit") return ["general", "customer"];
   return ["general"];
 });
 const currentFormFields = computed(() => currentConfig.value?.fields || []);
@@ -806,21 +827,23 @@ const filteredPermissionRows = computed(() => {
   return pengaturan.permissions.filter((item) => permissionModuleLabel(item.modul).toLowerCase().includes(keyword));
 });
 const filteredItems = computed(() => {
+  if (currentConfig.value?.serverPagination) return items.value;
   const keyword = cari.value.trim().toLowerCase();
   if (!keyword) return items.value;
   return items.value.filter((item) => textBlob(item).toLowerCase().includes(keyword));
 });
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredItems.value.length / pagination.pageSize)));
+const totalPages = computed(() => Math.max(1, Math.ceil((currentConfig.value?.serverPagination ? serverTotal.value : filteredItems.value.length) / pagination.pageSize)));
 const paginatedItems = computed(() => {
+  if (currentConfig.value?.serverPagination) return items.value;
   const page = Math.min(pagination.page, totalPages.value);
   const start = (page - 1) * pagination.pageSize;
   return filteredItems.value.slice(start, start + pagination.pageSize);
 });
 const paginationStart = computed(() => {
-  if (!filteredItems.value.length) return 0;
+  if (!(currentConfig.value?.serverPagination ? serverTotal.value : filteredItems.value.length)) return 0;
   return (Math.min(pagination.page, totalPages.value) - 1) * pagination.pageSize + 1;
 });
-const paginationEnd = computed(() => Math.min(paginationStart.value + pagination.pageSize - 1, filteredItems.value.length));
+const paginationEnd = computed(() => Math.min(paginationStart.value + pagination.pageSize - 1, currentConfig.value?.serverPagination ? serverTotal.value : filteredItems.value.length));
 const filteredAuditItems = computed(() => {
   const keyword = [auditFilter.user, auditFilter.nomor_pengaduan, auditFilter.nomor_surat_tugas].join(" ").trim().toLowerCase();
   if (!keyword) return auditItems.value;
@@ -870,9 +893,10 @@ const targetHapusLabel = computed(() => {
   return (
     item.nomor_pengaduan ||
     item.nomor_surat_tugas ||
-    item.kode_pelanggan ||
-    item.nama_pelanggan ||
-    item.nama_lokasi ||
+    item.kode_account ||
+    item.kode_customer ||
+    item.nama_account ||
+    item.nama_customer ||
     item.kode_printer ||
     item.model ||
     item.nama_toner ||
@@ -958,15 +982,25 @@ function paginationSelesai(total, target) {
 }
 
 function halamanSebelumnya(target = pagination) {
-  if (target.page > 1) target.page -= 1;
+  if (target.page > 1) {
+    target.page -= 1;
+    if (target === pagination && currentConfig.value?.serverPagination) muatHalaman();
+  }
 }
 
 function halamanBerikutnya(target, total) {
-  if (target.page < total) target.page += 1;
+  if (target.page < total) {
+    target.page += 1;
+    if (target === pagination && currentConfig.value?.serverPagination) muatHalaman();
+  }
 }
 
 function toggleMenu(item) {
   if (item.children) item.terbuka = !item.terbuka;
+}
+
+function menuContains(item, key) {
+  return item.key === key || item.children?.some((child) => menuContains(child, key)) || false;
 }
 
 function pilihMenu(item) {
@@ -980,6 +1014,7 @@ function pilihMenu(item) {
     return;
   }
   activeView.value = item.key;
+  if (item.key === "auditBarang") auditBarangTarget.value = null;
   sidebarTerbuka.value = false;
   userMenuTerbuka.value = false;
   cari.value = "";
@@ -992,14 +1027,38 @@ function pilihMenu(item) {
   muatHalaman();
 }
 
+function bukaAuditBarang(jenis, item) {
+  const barangJenis = jenis === "sukuCadang" || jenis === "suku_cadang" ? "suku_cadang" : jenis === "stokPrinter" ? "printer" : jenis === "stokToner" ? "toner" : jenis === "stokSparepart" ? "suku_cadang" : jenis;
+  const id = barangJenis === "printer" ? item.id : barangJenis === "toner" ? item.toner_id || item.id : item.suku_cadang_id || item.id;
+  const kode = barangJenis === "printer" ? item.mp_no : barangJenis === "toner" ? item.master_toner?.kode_toner || item.kode_toner : item.master_suku_cadang?.kode_suku_cadang || item.kode_suku_cadang;
+  auditBarangTarget.value = { jenis: barangJenis, id, kode };
+  activeView.value = "auditBarang";
+  sidebarTerbuka.value = false;
+}
+
+async function selesaiImpor(total) {
+  const kind = importKind.value;
+  importKind.value = null;
+  pesanSukses.value = `${total} data berhasil diimpor.`;
+  resetPagination();
+  if (kind === "lokasiCustomer") locationRefreshKey.value += 1;
+  else await muatHalaman();
+  await muatOptions();
+}
+
 function valueOf(item, key) {
+  if (key === "tipe_account") return item.jumlah_customer > 1 ? "Multisite" : "Single";
+  if (key === "kategori_unit") return item.master_printer_model?.master_printer_kategori?.nama_kategori || "-";
+  if (key === "model_unit") return [item.master_printer_model?.merek, item.master_printer_model?.nama_model].filter(Boolean).join(" ") || "-";
+  if (key === "lokasi_unit") return item.master_gudang?.nama_gudang || item.master_customer?.nama_customer || (item.status === "issued" ? "Dalam surat tugas" : "-");
   const value = item?.[key];
   if (typeof value === "boolean") return value ? "Aktif" : "Nonaktif";
   if (key.includes("tanggal") && value) return new Date(value).toLocaleDateString("id-ID");
   if (["status", "prioritas", "peran", "active", "role"].includes(key)) return labelStatus(value);
-  if (key === "pelanggan_id") return options.pelanggan.find((row) => row.id === value)?.nama_pelanggan || value || "-";
-  if (key === "lokasi_pelanggan_id") return options.lokasi.find((row) => row.id === value)?.nama_lokasi || value || "-";
-  if (key === "printer_id") return options.printer.find((row) => row.id === value)?.model || value || "-";
+  if (key === "account_id") return item.master_account?.nama_account || options.account.find((row) => row.id === value)?.nama_account || value || "-";
+  if (key === "customer_id") return item.master_customer?.nama_customer || options.customer.find((row) => row.id === value)?.nama_customer || value || "-";
+  if (key === "printer_id") return item.master_printer?.mp_no || options.printer.find((row) => row.id === value)?.mp_no || value || "-";
+  if (key === "kategori_id") return options.printerKategori.find((row) => row.id === value)?.nama_kategori || item.master_printer_kategori?.nama_kategori || value || "-";
   return value || "-";
 }
 
@@ -1062,7 +1121,7 @@ function nomorKomplainSurat(item) {
 }
 
 function alamatSurat(item) {
-  return item?.master_lokasi_pelanggan?.alamat || item?.master_pelanggan?.alamat || "-";
+  return item?.master_customer?.alamat || "-";
 }
 
 function pemakaianSurat(item) {
@@ -1072,7 +1131,7 @@ function pemakaianSurat(item) {
 function kodeItemSurat(item) {
   return (
     item?.master_toner?.kode_toner ||
-    item?.master_printer?.kode_printer ||
+    item?.master_printer?.mp_no ||
     item?.master_suku_cadang?.kode_suku_cadang ||
     item?.jenis_barang ||
     "-"
@@ -1082,7 +1141,8 @@ function kodeItemSurat(item) {
 function deskripsiItemSurat(item) {
   return (
     item?.master_toner?.nama_toner ||
-    item?.master_printer?.model ||
+    item?.master_printer?.master_printer_model?.nama_model ||
+    item?.master_printer?.mp_no ||
     item?.master_suku_cadang?.nama_suku_cadang ||
     item?.keterangan ||
     "-"
@@ -1161,6 +1221,7 @@ function templatePdfSurat(item) {
         <div class="meta-row"><span>Tanggal Surat Tugas</span><span>:</span><span>${escapeHtml(formatTanggalPdf(item.tanggal_jadwal || item.tanggal_dibuat))}</span></div>
         <div class="meta-row"><span>Nomor surat tugas</span><span>:</span><span>${escapeHtml(item.nomor_surat_tugas)}</span></div>
         <div class="meta-row"><span>Jenis tugas</span><span>:</span><span>${escapeHtml(item.jenis_pekerjaan || "Service")}</span></div>
+        <div class="meta-row"><span>MP No / Serial</span><span>:</span><span>${escapeHtml([item.master_printer?.mp_no || item.mp_no, item.master_printer?.serial_number].filter(Boolean).join(" / ") || "-")}</span></div>
       </div>
       <div>
         <div class="meta-row"><span>Request By</span><span>:</span><span>${escapeHtml(picSurat(item))}</span></div>
@@ -1269,6 +1330,7 @@ function statusBisaPrint(status) {
 }
 
 function canUpdateItem(item) {
+  if (currentConfig.value?.readOnly) return false;
   if (isAdmin.value) return true;
   if (activeView.value === "pengaduan") return false;
   if (activeView.value === "suratTugas") return roleAktif.value === "kepala_teknisi" || (roleAktif.value === "teknisi" && teknisiAssigned(item));
@@ -1277,12 +1339,13 @@ function canUpdateItem(item) {
 
 function canOpenItem(item) {
   if (!item) return false;
-  if (["pengaduan", "suratTugas"].includes(activeView.value)) return true;
+  if (["pengaduan", "suratTugas", "account"].includes(activeView.value)) return true;
   return canUpdateItem(item);
 }
 
 function canDeactivateItem(item) {
   if (!item) return false;
+  if (currentConfig.value?.readOnly || activeView.value === "printer") return false;
   if (currentConfig.value?.flow) return isAdmin.value && !["solved", "cancelled"].includes(item.status);
   return canUpdateItem(item);
 }
@@ -1315,62 +1378,90 @@ function canTambahItemSurat() {
   return form.id && (isAdmin.value || (roleAktif.value === "teknisi" && teknisiAssigned(form))) && ["progress", "ready_to_print"].includes(form.status);
 }
 
-function handleFieldChange(name) {
-  if (name === "jenis_pelanggan" && form.jenis_pelanggan === "single") {
-    form.alamat = form.alamat || "";
+async function handleFieldChange(name) {
+  if (name === "kategori_id" && activeView.value === "printer") form.model_id = "";
+  if (name === "account_id") {
+    form.customer_id = "";
+    form.printer_id = "";
+    await muatCustomerOptions(form.account_id);
+    await muatInstalledPrinterOptions();
   }
-  if (name === "pelanggan_id") {
-    form.lokasi_pelanggan_id = customerMultisite(form.pelanggan_id) ? form.lokasi_pelanggan_id : "";
+  if (name === "customer_id") {
+    form.printer_id = "";
+    await muatInstalledPrinterOptions();
+  }
+  if (name === "printer_id" && form.printer_id) {
+    const printer = options.printerTerpasang.find((row) => row.id === form.printer_id);
+    if (printer) form.mp_no = printer.mp_no;
   }
   if (currentConfig.value?.flow === "suratTugas" && name === "pengaduan_id") {
     const pengaduan = options.pengaduan.find((item) => item.id === form.pengaduan_id);
     if (!pengaduan) return;
     form.mp_no = pengaduan.mp_no || "";
-    form.pelanggan_id = pengaduan.pelanggan_id || "";
-    form.lokasi_pelanggan_id = pengaduan.lokasi_pelanggan_id || "";
+    form.account_id = pengaduan.account_id || "";
+    await muatCustomerOptions(form.account_id);
+    form.customer_id = pengaduan.customer_id || "";
+    form.printer_id = pengaduan.printer_id || "";
     form.catatan_masalah = pengaduan.deskripsi_masalah || "";
+    await muatInstalledPrinterOptions();
   }
-}
-
-function customerDipilih(pelangganId = form.pelanggan_id) {
-  return options.pelanggan.find((item) => item.id === pelangganId);
-}
-
-function customerMultisite(pelangganId = form.pelanggan_id) {
-  return customerDipilih(pelangganId)?.jenis_pelanggan === "multisite";
 }
 
 function tampilkanFieldForm(item) {
-  if (item.name === "status" && activeView.value === "suratTugas" && !isAdmin.value) {
+  if (["toner", "sukuCadang"].includes(activeView.value) && item.name === "aktif" && modeForm.value === "create") return false;
+  if (item.name === "printer_id" && activeView.value === "suratTugas" && !["maintenance", "support", "replacement"].includes(form.jenis_pekerjaan)) return false;
+  if (item.name === "gudang_id" && ["printer", "toner", "sukuCadang"].includes(activeView.value) && modeForm.value === "edit") return false;
+  if (item.name === "status" && activeView.value === "suratTugas") {
     return false;
-  }
-  if (item.name === "lokasi_pelanggan_id" && ["pengaduan", "suratTugas", "printerTerpasang"].includes(activeView.value)) {
-    return customerMultisite();
   }
   return true;
 }
 
 function fieldWajib(item) {
-  if (item.name === "alamat" && activeView.value === "pelanggan" && form.jenis_pelanggan === "single") return true;
-  if (item.name === "lokasi_pelanggan_id" && ["pengaduan", "suratTugas", "printerTerpasang"].includes(activeView.value)) return customerMultisite();
   return item.required;
 }
 
 function relationOptions(item) {
   const rows = options[item.source] || [];
+  if (item.name === "model_id") return rows.filter((option) => option.kategori_id === form.kategori_id && (option.aktif || option.id === form.model_id));
+  if (item.source === "printerKategori") return rows.filter((option) => option.aktif || option.id === form.kategori_id);
+  if (item.name === "gudang_id" && ["printer", "toner", "sukuCadang"].includes(activeView.value)) {
+    return rows.filter((option) => option.aktif);
+  }
   if (item.name === "sales_id") {
     return rows.filter((option) => normalisasiRoleFrontend(option.role || option.peran) === "sales");
   }
-  if (activeView.value === "lokasi" && item.name === "pelanggan_id") {
-    return rows.filter((option) => option.jenis_pelanggan === "multisite");
-  }
-  if (activeView.value === "printerTerpasang" && item.name === "lokasi_pelanggan_id" && form.pelanggan_id) {
-    return rows.filter((option) => option.pelanggan_id === form.pelanggan_id);
-  }
-  if (item.name === "lokasi_pelanggan_id" && form.pelanggan_id) {
-    return rows.filter((option) => option.pelanggan_id === form.pelanggan_id);
-  }
+  if (item.name === "account_id") return rows.filter((option) => option.aktif || option.id === form.account_id);
+  if (item.name === "customer_id") return rows.filter((option) => option.account_id === form.account_id && (option.aktif || option.id === form.customer_id));
+  if (item.name === "printer_id") return rows.filter((option) => option.customer_id === form.customer_id);
   return rows;
+}
+
+async function muatCustomerOptions(accountId) {
+  options.customer = [];
+  if (!accountId) return;
+  try {
+    const response = await api.get(`/account/${accountId}/customer`);
+    if (form.account_id !== accountId) return;
+    options.customer = response.data.data?.items || [];
+    const aktif = options.customer.filter((item) => item.aktif);
+    if (!form.customer_id && aktif.length === 1) form.customer_id = aktif[0].id;
+  } catch (error) {
+    pesanError.value = error.response?.data?.pesan || "Customer gagal dimuat.";
+  }
+}
+
+async function muatInstalledPrinterOptions() {
+  options.printerTerpasang = [];
+  if (!form.customer_id) return;
+  try {
+    const response = await api.get("/printer-terpasang", {
+      params: { customer_id: form.customer_id, cari: installedPrinterSearch.value, batas: 100 }
+    });
+    options.printerTerpasang = response.data.data?.items || [];
+  } catch (error) {
+    pesanError.value = error.response?.data?.pesan || "Printer terpasang gagal dimuat.";
+  }
 }
 
 function badgeClass(value) {
@@ -1407,10 +1498,88 @@ function resetItemForm() {
   });
 }
 
+function resetSiteForm() {
+  Object.assign(siteForm, {
+    id: "",
+    kode_customer: "",
+    nama_customer: "",
+    alamat: "",
+    nama_pic: "",
+    telepon_pic: "",
+    email_pic: "",
+    aktif: true
+  });
+  siteMode.value = "create";
+}
+
+function resetFirstCustomerForm() {
+  Object.assign(firstCustomerForm, {
+    kode_customer: "",
+    nama_customer: "",
+    alamat: "",
+    nama_pic: "",
+    telepon_pic: "",
+    email_pic: "",
+    aktif: true
+  });
+}
+
+async function muatSitePelanggan(accountId = form.id) {
+  if (!accountId) {
+    siteRows.value = [];
+    return;
+  }
+  try {
+    const response = await api.get(`/account/${accountId}/customer`);
+    siteRows.value = response.data.data?.items || [];
+  } catch (error) {
+    pesanError.value = error.response?.data?.pesan || "Customer gagal dimuat.";
+  }
+}
+
+function bukaSite(site = null) {
+  resetSiteForm();
+  if (site) {
+    Object.assign(siteForm, site);
+    siteMode.value = "edit";
+  }
+  siteFormVisible.value = true;
+}
+
+async function simpanSite() {
+  if (!form.id || !isAdmin.value) return;
+  const data = {
+    kode_customer: siteForm.kode_customer.trim(),
+    nama_customer: siteForm.nama_customer.trim(),
+    alamat: siteForm.alamat.trim(),
+    nama_pic: siteForm.nama_pic?.trim() || null,
+    telepon_pic: siteForm.telepon_pic?.trim() || null,
+    email_pic: siteForm.email_pic?.trim() || null,
+    aktif: Boolean(siteForm.aktif)
+  };
+  try {
+    loading.value = true;
+    if (siteMode.value === "edit") await api.put(`/account/${form.id}/customer/${siteForm.id}`, data);
+    else await api.post(`/account/${form.id}/customer`, data);
+    pesanSukses.value = "Customer berhasil disimpan.";
+    siteFormVisible.value = false;
+    await Promise.all([muatSitePelanggan(), muatHalaman(), muatOptions()]);
+  } catch (error) {
+    pesanError.value = error.response?.data?.pesan || "Customer gagal disimpan.";
+  } finally {
+    loading.value = false;
+  }
+}
+
 async function bukaForm(item = null, prefill = null) {
   resetForm();
+  installedPrinterSearch.value = "";
   formTab.value = "general";
   resetItemForm();
+  siteRows.value = [];
+  resetSiteForm();
+  resetFirstCustomerForm();
+  siteFormVisible.value = false;
   modeForm.value = item ? "edit" : "create";
   if (currentConfig.value?.fields?.some((fieldItem) => fieldItem.type === "relation")) {
     await muatOptions();
@@ -1430,6 +1599,7 @@ async function bukaForm(item = null, prefill = null) {
     }
     Object.assign(form, sumber);
     form.id = sumber.id;
+    if (activeView.value === "printer") form.kategori_id = sumber.master_printer_model?.kategori_id || "";
     form.pic_teknisi_id = sumber.teknisi_surat_tugas?.find((row) => row.peran === "utama")?.teknisi_id || "";
     currentConfig.value?.fields.forEach((fieldItem) => {
       if (fieldItem.type === "datetime-local" && form[fieldItem.name]) {
@@ -1442,12 +1612,18 @@ async function bukaForm(item = null, prefill = null) {
     });
   }
   if (prefill) Object.assign(form, prefill);
+  if (form.account_id) await muatCustomerOptions(form.account_id);
+  if (["pengaduan", "suratTugas"].includes(activeView.value)) await muatInstalledPrinterOptions();
   modalTerbuka.value = true;
+  if (activeView.value === "account" && form.id) await muatSitePelanggan(form.id);
 }
 
 function payloadForm() {
   const data = {};
   currentConfig.value.fields.forEach((item) => {
+    if (item.name === "gudang_id" && ["printer", "toner", "sukuCadang"].includes(activeView.value) && modeForm.value === "edit") return;
+    if (item.name === "kategori_id" && activeView.value === "printer") return;
+    if (item.name === "status" && activeView.value === "suratTugas" && modeForm.value === "edit") return;
     const value = form[item.name];
     if (item.readonly && (value === "" || value == null)) return;
     if (item.name === "password" && modeForm.value === "edit" && !value) return;
@@ -1455,8 +1631,16 @@ function payloadForm() {
     else if (item.type === "checkbox") data[item.name] = Boolean(value);
     else data[item.name] = value === "" ? null : value;
   });
-  if (["pengaduan", "suratTugas", "printerTerpasang"].includes(activeView.value) && !customerMultisite(data.pelanggan_id || form.pelanggan_id)) {
-    data.lokasi_pelanggan_id = null;
+  if (activeView.value === "account" && modeForm.value === "create") {
+    data.customer_pertama = {
+      kode_customer: firstCustomerForm.kode_customer.trim(),
+      nama_customer: firstCustomerForm.nama_customer.trim(),
+      alamat: firstCustomerForm.alamat.trim(),
+      nama_pic: firstCustomerForm.nama_pic?.trim() || null,
+      telepon_pic: firstCustomerForm.telepon_pic?.trim() || null,
+      email_pic: firstCustomerForm.email_pic?.trim() || null,
+      aktif: true
+    };
   }
   return data;
 }
@@ -1473,14 +1657,22 @@ async function simpanForm() {
   try {
     loading.value = true;
     const config = currentConfig.value;
+    let saved;
     if (modeForm.value === "edit") {
-      await api.put(`${config.endpoint}/${form.id}`, payloadForm());
+      saved = await api.put(`${config.endpoint}/${form.id}`, payloadForm());
       pesanSukses.value = "Data berhasil diperbarui.";
     } else {
-      await api.post(config.endpoint, payloadForm());
+      saved = await api.post(config.endpoint, payloadForm());
       pesanSukses.value = "Data berhasil dibuat.";
     }
-    modalTerbuka.value = false;
+    if (activeView.value === "account") {
+      form.id = saved.data.data.id;
+      modeForm.value = "edit";
+      formTab.value = "customer";
+      await muatSitePelanggan(form.id);
+    } else {
+      modalTerbuka.value = false;
+    }
     await muatOptions();
     await muatHalaman();
   } catch (error) {
@@ -1490,8 +1682,9 @@ async function simpanForm() {
   }
 }
 
-function mintaKonfirmasi(item, mode = "deactivate") {
+function mintaKonfirmasi(item, mode = "deactivate", jenis = "account") {
   targetHapus.value = item;
+  targetHapusJenis.value = jenis;
   modeKonfirmasi.value = mode;
   konfirmasiHapusTerbuka.value = true;
 }
@@ -1499,6 +1692,7 @@ function mintaKonfirmasi(item, mode = "deactivate") {
 function batalHapus() {
   if (loading.value) return;
   targetHapus.value = null;
+  targetHapusJenis.value = "account";
   modeKonfirmasi.value = "deactivate";
   konfirmasiHapusTerbuka.value = false;
 }
@@ -1508,7 +1702,18 @@ async function konfirmasiHapus() {
   if (!item) return;
   try {
     loading.value = true;
-    if (modeKonfirmasi.value === "delete") {
+    if (targetHapusJenis.value === "customer") {
+      const endpoint = `/account/${form.id}/customer/${item.id}`;
+      if (modeKonfirmasi.value === "delete") {
+        await api.delete(`${endpoint}/permanent`);
+        pesanSukses.value = "Customer berhasil dihapus permanen.";
+      } else {
+        await api.delete(endpoint);
+        pesanSukses.value = "Customer berhasil dinonaktifkan.";
+      }
+      await muatSitePelanggan();
+      await muatOptions();
+    } else if (modeKonfirmasi.value === "delete") {
       await api.delete(`${currentConfig.value.endpoint}/${item.id}/permanent`);
       pesanSukses.value = "Data berhasil dihapus permanen.";
     } else if (currentConfig.value.flow === "suratTugas") {
@@ -1527,6 +1732,7 @@ async function konfirmasiHapus() {
   } finally {
     loading.value = false;
     targetHapus.value = null;
+    targetHapusJenis.value = "account";
     modeKonfirmasi.value = "deactivate";
     konfirmasiHapusTerbuka.value = false;
   }
@@ -1608,8 +1814,9 @@ function buatSuratDariKomplain() {
   bukaForm(null, {
     pengaduan_id: sumber.id || "",
     mp_no: sumber.mp_no || "",
-    pelanggan_id: sumber.pelanggan_id || "",
-    lokasi_pelanggan_id: sumber.lokasi_pelanggan_id || "",
+    account_id: sumber.account_id || "",
+    customer_id: sumber.customer_id || "",
+    printer_id: sumber.printer_id || "",
     catatan_masalah: sumber.deskripsi_masalah || "",
     status: "pending"
   });
@@ -1665,18 +1872,23 @@ async function hapusItemSurat(item) {
   }
 }
 
-function bukaMutasiStok() {
+async function bukaMutasiStok(jenis = "masuk", row = null) {
+  const itemField = {
+    toner: "toner_id",
+    printer: "printer_id",
+    suku_cadang: "suku_cadang_id"
+  }[activeStockGroup.value];
   Object.assign(stockForm, {
-    jenis_mutasi: "masuk",
-    gudang_asal_id: "",
-    gudang_tujuan_id: "",
+    jenis_mutasi: jenis,
+    gudang_asal_id: jenis === "keluar" ? row?.gudang_id || "" : "",
+    gudang_tujuan_id: jenis === "masuk" ? row?.gudang_id || "" : "",
     jenis_barang: activeStockGroup.value || "toner",
-    item_id: "",
+    item_id: row?.[itemField] || "",
     jumlah: 1,
-    keterangan: "",
-    langsung_posting: true
+    keterangan: ""
   });
   modalStokTerbuka.value = true;
+  await muatOptions();
 }
 
 async function simpanMutasiStok() {
@@ -1689,10 +1901,10 @@ async function simpanMutasiStok() {
     }[stockForm.jenis_barang];
     await api.post("/mutasi-stok", {
       jenis_mutasi: stockForm.jenis_mutasi,
-      gudang_asal_id: stockForm.gudang_asal_id || null,
-      gudang_tujuan_id: stockForm.gudang_tujuan_id || null,
+      gudang_asal_id: ["keluar", "transfer"].includes(stockForm.jenis_mutasi) ? stockForm.gudang_asal_id || null : null,
+      gudang_tujuan_id: ["masuk", "transfer", "penyesuaian"].includes(stockForm.jenis_mutasi) ? stockForm.gudang_tujuan_id || null : null,
       keterangan: stockForm.keterangan || null,
-      langsung_posting: stockForm.langsung_posting,
+      langsung_posting: true,
       detail: [
         {
           jenis_barang: stockForm.jenis_barang,
@@ -1702,7 +1914,7 @@ async function simpanMutasiStok() {
         }
       ]
     });
-    pesanSukses.value = "Mutasi stok berhasil dibuat.";
+    pesanSukses.value = stockForm.jenis_mutasi === "keluar" ? "Stok berhasil dikurangi." : "Stok berhasil diperbarui.";
     modalStokTerbuka.value = false;
     await muatStok();
   } catch (error) {
@@ -1712,29 +1924,45 @@ async function simpanMutasiStok() {
   }
 }
 
+async function ambilDaftarOptions(endpoint, semuaHalaman) {
+  const first = await api.get(endpoint, { params: { batas: 100 } });
+  const data = first.data.data;
+  if (Array.isArray(data)) return data;
+  const result = [...(data?.items || [])];
+  if (!semuaHalaman || !data?.meta?.total) return result;
+  const totalPages = Math.ceil(data.meta.total / 100);
+  for (let start = 2; start <= totalPages; start += 5) {
+    const pages = Array.from({ length: Math.min(5, totalPages - start + 1) }, (_, index) => start + index);
+    const responses = await Promise.all(pages.map((halaman) => api.get(endpoint, { params: { batas: 100, halaman } })));
+    responses.forEach((response) => result.push(...(response.data.data?.items || [])));
+  }
+  return result;
+}
+
 async function muatOptions() {
   const loaders = [
-    ["pelanggan", "/pelanggan"],
-    ["lokasi", "/lokasi-pelanggan"],
-    ["printer", "/printer"],
+    ["account", "/account"],
+    ["printerKategori", "/printer-kategori"],
+    ["printerModel", "/printer-model"],
     ["toner", "/toner"],
     ["sukuCadang", "/suku-cadang"],
     ["gudang", "/gudang"],
     ["pengguna", "/pengguna"],
-    ["printerTerpasang", "/printer-terpasang"],
     ["pengaduan", "/pengaduan"],
     ["suratTugas", "/surat-tugas"]
   ];
-  const responses = await Promise.allSettled(loaders.map(([, endpoint]) => api.get(endpoint, { params: { batas: 100 } })));
+  const pagedOptions = new Set(["account", "printerKategori", "printerModel", "toner", "sukuCadang", "gudang"]);
+  const responses = await Promise.allSettled(loaders.map(([key, endpoint]) => ambilDaftarOptions(endpoint, pagedOptions.has(key))));
   const gagalWajib = [];
   responses.forEach((result, index) => {
     const key = loaders[index][0];
     if (result.status !== "fulfilled") {
-      if (["pelanggan", "lokasi", "pengguna"].includes(key)) gagalWajib.push(key);
+      if (["account", "pengguna", "printerKategori", "printerModel"].includes(key) || (key === "gudang" && ["printer", "toner", "sukuCadang"].includes(activeView.value))) {
+        gagalWajib.push(key);
+      }
       return;
     }
-    const data = result.value.data.data;
-    options[key] = Array.isArray(data) ? data : data?.items || [];
+    options[key] = result.value;
   });
   options.teknisi = options.pengguna.filter((item) => ["teknisi", "technician"].includes(item.role || item.peran));
   if (gagalWajib.length) {
@@ -1744,7 +1972,7 @@ async function muatOptions() {
 
 async function muatHalaman() {
   if (activeView.value === "dashboard") {
-    await Promise.all([muatOptions(), muatStok(true)]);
+    await Promise.all([muatOptions(), muatStok(true), muatPrinterSummary()]);
     return;
   }
   if (["rolePermission", "slaPending"].includes(activeView.value)) {
@@ -1759,18 +1987,64 @@ async function muatHalaman() {
     auditItems.value = [];
     return;
   }
+  if (activeView.value === "auditBarang") return;
   const config = currentConfig.value;
   if (!config) return;
   try {
     loading.value = true;
-    const response = await api.get(config.endpoint, { params: config.search ? { cari: cari.value, batas: 100 } : {} });
+    const params = config.serverPagination
+      ? {
+          cari: cari.value,
+          halaman: pagination.page,
+          batas: pagination.pageSize,
+          ...Object.fromEntries((config.printerFilterFields || []).filter((key) => printerFilters[key]).map((key) => [key, printerFilters[key]]))
+        }
+      : config.search ? { cari: cari.value, batas: 100 } : {};
+    const response = await api.get(config.endpoint, { params });
     const data = response.data.data;
     items.value = Array.isArray(data) ? data : data?.items || [];
+    serverTotal.value = config.serverPagination ? data?.meta?.total || 0 : 0;
   } catch (error) {
     pesanError.value = error.response?.data?.pesan || "Data gagal dimuat.";
   } finally {
     loading.value = false;
   }
+}
+
+async function muatPrinterSummary() {
+  try {
+    const response = await api.get("/printer/summary");
+    Object.assign(printerSummary, response.data.data);
+  } catch (error) {
+    pesanError.value = error.response?.data?.pesan || "Ringkasan printer gagal dimuat.";
+  }
+}
+
+async function ubahPrinterFilter(key, value) {
+  printerFilters[key] = value;
+  if (key === "kategori_id") printerFilters.model_id = "";
+  resetPagination();
+  await muatHalaman();
+}
+
+async function muatAvailablePrinters() {
+  availablePrinterOptions.value = [];
+  if (itemForm.jenis_barang !== "printer" || !itemForm.gudang_id) return;
+  try {
+    const response = await api.get("/printer", {
+      params: { status: "available", gudang_id: itemForm.gudang_id, cari: printerItemSearch.value, batas: 25 }
+    });
+    availablePrinterOptions.value = response.data.data?.items || [];
+  } catch (error) {
+    pesanError.value = error.response?.data?.pesan || "Unit printer gagal dimuat.";
+  }
+}
+
+function pilihItemSurat() {
+  if (itemForm.jenis_barang !== "printer") return;
+  const unit = availablePrinterOptions.value.find((row) => row.id === itemForm.item_id);
+  itemForm.serial_number = unit?.serial_number || "";
+  itemForm.jumlah_pakai = 1;
 }
 
 async function muatPengaturan() {
@@ -1875,7 +2149,7 @@ async function muatProfil() {
     const response = await api.get("/auth/saya");
     pengguna.value = response.data.data;
     statusBackend.value = "Terhubung";
-    await Promise.all([muatOptions(), muatStok(true)]);
+    await Promise.all([muatOptions(), muatStok(true), muatPrinterSummary()]);
   } catch (error) {
     pesanError.value = error.response?.data?.pesan || "Sesi tidak valid.";
     hapusToken();
@@ -1914,11 +2188,11 @@ onMounted(muatProfil);
         <section v-for="group in menu" :key="group.section" class="menu-section">
           <p>{{ group.section }}</p>
           <div class="menu-list">
-            <div v-for="item in group.items" v-show="!item.adminOnly || isAdmin" :key="item.nama" class="menu-block">
+            <div v-for="item in group.items" v-show="(!item.adminOnly || isAdmin) && (item.key !== 'auditBarang' || canViewAuditBarang)" :key="item.nama" class="menu-block">
               <button
                 type="button"
                 class="menu-item"
-                :class="{ active: item.key === activeView || item.children?.some((child) => child.key === activeView), 'has-children': item.children }"
+                :class="{ active: menuContains(item, activeView), 'has-children': item.children }"
                 :aria-current="item.key === activeView ? 'page' : undefined"
                 :aria-expanded="item.children ? item.terbuka : undefined"
                 @click="pilihMenu(item)"
@@ -1931,17 +2205,37 @@ onMounted(muatProfil);
 
               <Transition name="submenu">
                 <div v-if="item.children && item.terbuka" class="submenu-list">
-                  <button
-                    v-for="child in item.children"
-                    :key="child.nama"
-                    type="button"
-                    class="submenu-item"
-                    :class="{ active: child.key === activeView }"
-                    @click="pilihMenu(child)"
-                  >
-                    <component :is="child.icon" :size="20" />
-                    <span>{{ child.nama }}</span>
-                  </button>
+                  <div v-for="child in item.children" :key="child.nama" class="submenu-block">
+                    <button
+                      type="button"
+                      class="submenu-item"
+                      :class="{ active: menuContains(child, activeView) }"
+                      :aria-current="child.key === activeView ? 'page' : undefined"
+                      :aria-expanded="child.children ? child.terbuka : undefined"
+                      @click="pilihMenu(child)"
+                    >
+                      <component :is="child.icon" :size="20" />
+                      <span>{{ child.nama }}</span>
+                      <ChevronDown v-if="child.children && child.terbuka" class="menu-chevron" :size="16" />
+                      <ChevronRight v-else-if="child.children" class="menu-chevron" :size="16" />
+                    </button>
+                    <Transition name="submenu">
+                      <div v-if="child.children && child.terbuka" class="submenu-list nested-submenu">
+                        <button
+                          v-for="grandchild in child.children"
+                          :key="grandchild.key"
+                          type="button"
+                          class="submenu-item"
+                          :class="{ active: grandchild.key === activeView }"
+                          :aria-current="grandchild.key === activeView ? 'page' : undefined"
+                          @click="pilihMenu(grandchild)"
+                        >
+                          <component :is="grandchild.icon" :size="18" />
+                          <span>{{ grandchild.nama }}</span>
+                        </button>
+                      </div>
+                    </Transition>
+                  </div>
                 </div>
               </Transition>
             </div>
@@ -2037,6 +2331,9 @@ onMounted(muatProfil);
         v-model:stok-search="stokSearch"
         :active-stock-view="activeStockView"
         :active-stock-group="activeStockGroup"
+        :can-manage-stock="isAdmin || roleAktif === 'warehouse'"
+        :can-view-audit-barang="canViewAuditBarang"
+        :can-create-printer="isAdmin"
         :filtered-stok="filteredStok"
         :paginated-stok="paginatedStok"
         :stok-pagination="stokPagination"
@@ -2047,6 +2344,13 @@ onMounted(muatProfil);
         @open-stock-mutation="bukaMutasiStok"
         @previous-page="halamanSebelumnya"
         @next-page="halamanBerikutnya"
+        @create-printer="activeView = 'printer'; bukaForm()"
+        @open-history="bukaAuditBarang(activeView, $event)"
+      />
+
+      <AuditBarangPage
+        v-else-if="activeView === 'auditBarang'"
+        :target="auditBarangTarget"
       />
 
       <AuditPage
@@ -2069,12 +2373,20 @@ onMounted(muatProfil);
         @next-page="halamanBerikutnya"
       />
 
+      <LokasiCustomer
+        v-else-if="activeView === 'lokasiCustomer'"
+        :key="locationRefreshKey"
+        :can-manage="isAdmin"
+        @open-import="importKind = 'lokasiCustomer'"
+      />
+
       <component
         :is="currentCrudComponent"
         v-else-if="currentConfig"
         v-model:cari="cari"
         :current-config="currentConfig"
         :can-create="canCreate"
+        :can-import="canImportMaster"
         :paginated-items="paginatedItems"
         :filtered-items="filteredItems"
         :pagination="pagination"
@@ -2089,9 +2401,13 @@ onMounted(muatProfil);
         :can-resolve-complaint-item="canResolveComplaintItem"
         :can-run-surat-action="canRunSuratAction"
         :can-print-surat-item="canPrintSuratItem"
+        :can-view-audit-barang="canViewAuditBarang && ['printer', 'toner', 'sukuCadang'].includes(activeView)"
         :value-of="valueOf"
         :badge-class="badgeClass"
         :label-status="labelStatus"
+        :total-items="currentConfig.serverPagination ? serverTotal : filteredItems.length"
+        :printer-filters="printerFilters"
+        :printer-filter-options="{ kategori: options.printerKategori, model: options.printerModel }"
         @reset-pagination="resetPagination"
         @load-page="muatHalaman"
         @open-form="bukaForm"
@@ -2102,10 +2418,13 @@ onMounted(muatProfil);
         @hard-delete-item="mintaKonfirmasi($event, 'delete')"
         @previous-page="halamanSebelumnya"
         @next-page="halamanBerikutnya"
+        @update-printer-filter="ubahPrinterFilter"
+        @open-history="bukaAuditBarang(activeView, $event)"
+        @open-import="importKind = activeView"
       />
     </section>
 
-    <div v-if="konfirmasiHapusTerbuka" class="modal-backdrop">
+    <div v-if="konfirmasiHapusTerbuka" class="modal-backdrop confirm-backdrop">
       <section class="confirm-panel" role="dialog" aria-modal="true" aria-labelledby="hapus-title">
         <div class="confirm-icon">
           <Trash2 :size="22" />
@@ -2147,7 +2466,7 @@ onMounted(muatProfil);
             :class="{ active: formTab === tab }"
             @click="formTab = tab"
           >
-            {{ tab === "suratTugas" ? "Surat Tugas" : tab === "item" ? "Item" : "General" }}
+            {{ tab === "suratTugas" ? "Surat Tugas" : tab === "item" ? "Item" : tab === "customer" ? "Customer" : "General" }}
           </button>
         </div>
 
@@ -2164,12 +2483,15 @@ onMounted(muatProfil);
                 <option value="">Pilih</option>
                 <option v-for="option in item.options" :key="option" :value="option">{{ labelStatus(option) }}</option>
               </select>
-              <select v-else-if="item.type === 'relation'" v-model="form[item.name]" :required="fieldWajib(item)" @change="handleFieldChange(item.name)">
-                <option value="">Pilih</option>
-                <option v-for="option in relationOptions(item)" :key="option.id" :value="option.id">
-                  {{ labelOption(item.source, option, item.optionLabel) }}
-                </option>
-              </select>
+              <template v-else-if="item.type === 'relation'">
+                <input v-if="item.name === 'printer_id'" v-model="installedPrinterSearch" type="search" placeholder="Cari MP No / Serial" @input="muatInstalledPrinterOptions" />
+                <select v-model="form[item.name]" :required="fieldWajib(item)" @change="handleFieldChange(item.name)">
+                  <option value="">Pilih</option>
+                  <option v-for="option in relationOptions(item)" :key="option.id" :value="option.id">
+                    {{ labelOption(item.source, option, item.optionLabel) }}
+                  </option>
+                </select>
+              </template>
               <input
                 v-else
                 v-model="form[item.name]"
@@ -2181,6 +2503,16 @@ onMounted(muatProfil);
             </template>
           </label>
 
+          <div v-if="activeView === 'account' && modeForm === 'create'" class="form-section-title">Customer pertama</div>
+          <template v-if="activeView === 'account' && modeForm === 'create'">
+            <label><span>Kode Customer</span><input v-model="firstCustomerForm.kode_customer" type="text" required /></label>
+            <label><span>Nama Customer</span><input v-model="firstCustomerForm.nama_customer" type="text" required /></label>
+            <label><span>Alamat Operasional</span><textarea v-model="firstCustomerForm.alamat" rows="3" required /></label>
+            <label><span>Nama PIC</span><input v-model="firstCustomerForm.nama_pic" type="text" /></label>
+            <label><span>Telepon PIC</span><input v-model="firstCustomerForm.telepon_pic" type="tel" /></label>
+            <label><span>Email PIC</span><input v-model="firstCustomerForm.email_pic" type="email" /></label>
+          </template>
+
           <div class="modal-actions">
             <button class="secondary-button" type="button" @click="modalTerbuka = false">Batal</button>
             <button v-if="modeForm === 'create' ? canCreate : canUpdateItem(form)" class="primary-button" type="submit" :disabled="loading">
@@ -2189,6 +2521,65 @@ onMounted(muatProfil);
             </button>
           </div>
         </form>
+
+        <section v-else-if="activeView === 'account' && formTab === 'customer'" class="tab-panel site-panel">
+          <div class="site-panel-heading">
+            <div>
+              <strong>Customer</strong>
+              <span>{{ siteRows.filter((row) => row.aktif).length }} aktif / {{ siteRows.filter((row) => row.aktif).length > 1 ? "Multisite" : "Single" }}</span>
+            </div>
+            <button v-if="form.id && isAdmin" class="primary-button" type="button" @click="bukaSite()">
+              <Plus :size="16" />
+              <span>Tambah Customer</span>
+            </button>
+          </div>
+          <p v-if="!form.id" class="helper-text">Simpan Account terlebih dahulu.</p>
+          <div v-else class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Kode</th>
+                  <th>Nama Customer</th>
+                  <th>Alamat</th>
+                  <th>PIC</th>
+                  <th>Status</th>
+                  <th v-if="isAdmin">Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="site in siteRows" :key="site.id">
+                  <td>{{ site.kode_customer }}</td>
+                  <td>{{ site.nama_customer }}</td>
+                  <td>{{ site.alamat }}</td>
+                  <td>{{ site.nama_pic || "-" }}</td>
+                  <td><span class="status-badge" :class="badgeClass(site.aktif)">{{ site.aktif ? "Aktif" : "Nonaktif" }}</span></td>
+                  <td v-if="isAdmin">
+                    <div class="row-actions">
+                      <button class="icon-action" type="button" title="Edit Customer" @click="bukaSite(site)"><Pencil :size="16" /></button>
+                      <button v-if="site.aktif && siteRows.filter((row) => row.aktif).length > 1" class="icon-action warning" type="button" title="Nonaktifkan Customer" @click="mintaKonfirmasi(site, 'deactivate', 'customer')"><Power :size="16" /></button>
+                      <button v-if="site.boleh_hapus_permanen !== false" class="icon-action danger" type="button" title="Hapus Customer permanen" @click="mintaKonfirmasi(site, 'delete', 'customer')"><Trash2 :size="16" /></button>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="!siteRows.length"><td :colspan="isAdmin ? 6 : 5" class="empty-cell">Belum ada Customer.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <form v-if="siteFormVisible && isAdmin && form.id" class="data-form inline-form site-form" @submit.prevent="simpanSite">
+            <label><span>Kode Customer</span><input v-model="siteForm.kode_customer" type="text" required /></label>
+            <label><span>Nama Customer</span><input v-model="siteForm.nama_customer" type="text" required /></label>
+            <label><span>Alamat</span><textarea v-model="siteForm.alamat" rows="3" required /></label>
+            <label><span>Nama PIC</span><input v-model="siteForm.nama_pic" type="text" /></label>
+            <label><span>Telepon PIC</span><input v-model="siteForm.telepon_pic" type="tel" /></label>
+            <label><span>Email PIC</span><input v-model="siteForm.email_pic" type="email" /></label>
+            <label class="check-field"><input v-model="siteForm.aktif" type="checkbox" /><span>Aktif</span></label>
+            <div class="modal-actions">
+              <button class="secondary-button" type="button" @click="siteFormVisible = false">Batal</button>
+              <button class="primary-button" type="submit" :disabled="loading"><Save :size="16" /><span>{{ loading ? "Menyimpan..." : "Simpan Customer" }}</span></button>
+            </div>
+          </form>
+        </section>
 
         <section v-else-if="currentConfig.flow === 'pengaduan' && formTab === 'suratTugas'" class="tab-panel">
           <div v-if="isAdmin || roleAktif === 'kepala_teknisi'" class="tab-panel-actions">
@@ -2244,7 +2635,7 @@ onMounted(muatProfil);
                 </thead>
                 <tbody>
                   <tr v-for="item in pemakaianSuratAktif" :key="item.id">
-                    <td>{{ item.master_toner?.nama_toner || item.master_printer?.model || item.master_suku_cadang?.nama_suku_cadang || item.jenis_barang }}</td>
+                    <td>{{ item.master_toner?.nama_toner || item.master_printer?.mp_no || item.master_suku_cadang?.nama_suku_cadang || item.jenis_barang }}</td>
                     <td>{{ item.jumlah_pakai }}</td>
                     <td>{{ item.serial_number || "-" }}</td>
                     <td>{{ item.keterangan || "-" }}</td>
@@ -2264,35 +2655,37 @@ onMounted(muatProfil);
             <form v-if="canTambahItemSurat()" class="data-form inline-form" @submit.prevent="simpanItemSurat">
               <label>
                 <span>Jenis Item</span>
-                <select v-model="itemForm.jenis_barang" required>
-                  <option value="printer">Printer</option>
+                <select v-model="itemForm.jenis_barang" required @change="itemForm.item_id = ''; muatAvailablePrinters()">
+                  <option v-if="['installation', 'delivery', 'replacement'].includes(form.jenis_pekerjaan)" value="printer">Printer</option>
                   <option value="toner">Toner</option>
                   <option value="suku_cadang">Sparepart</option>
                 </select>
               </label>
               <label>
+                <span v-if="itemForm.jenis_barang === 'printer'">Cari MP No / Serial</span>
+                <input v-if="itemForm.jenis_barang === 'printer'" v-model="printerItemSearch" type="search" placeholder="Cari unit tersedia" @input="muatAvailablePrinters" />
                 <span>Item</span>
-                <select v-model="itemForm.item_id" required>
+                <select v-model="itemForm.item_id" required @change="pilihItemSurat">
                   <option value="">Pilih item</option>
                   <option v-for="item in itemSuratOptions" :key="item.id" :value="item.id">
-                    {{ item.nama_toner || item.model || item.nama_suku_cadang }}
+                    {{ item.nama_toner || item.mp_no || item.nama_suku_cadang }}
                   </option>
                 </select>
               </label>
               <label>
                 <span>Gudang</span>
-                <select v-model="itemForm.gudang_id" required>
+                <select v-model="itemForm.gudang_id" required @change="itemForm.item_id = ''; muatAvailablePrinters()">
                   <option value="">Pilih gudang</option>
                   <option v-for="gudang in options.gudang" :key="gudang.id" :value="gudang.id">{{ gudang.nama_gudang }}</option>
                 </select>
               </label>
               <label>
                 <span>Kuantitas</span>
-                <input v-model="itemForm.jumlah_pakai" type="number" min="1" step="1" required />
+                <input v-model="itemForm.jumlah_pakai" type="number" min="1" :max="itemForm.jenis_barang === 'printer' ? 1 : undefined" step="1" :readonly="itemForm.jenis_barang === 'printer'" required />
               </label>
               <label>
                 <span>Serial Number</span>
-                <input v-model="itemForm.serial_number" type="text" />
+                <input v-model="itemForm.serial_number" type="text" :readonly="itemForm.jenis_barang === 'printer'" />
               </label>
               <label>
                 <span>Catatan</span>
@@ -2316,7 +2709,7 @@ onMounted(muatProfil);
         <div class="modal-heading">
           <div>
             <p class="eyebrow">Stock Item</p>
-            <h2>Tambah Stok</h2>
+            <h2>{{ stockForm.jenis_mutasi === "keluar" ? "Kurangi Stok" : stockForm.jenis_mutasi === "masuk" ? "Tambah Stok" : "Mutasi Stok" }}</h2>
           </div>
           <button class="icon-action" type="button" title="Tutup" @click="modalStokTerbuka = false">
             <X :size="18" />
@@ -2327,33 +2720,29 @@ onMounted(muatProfil);
           <label>
             <span>Jenis Mutasi</span>
             <select v-model="stockForm.jenis_mutasi" required>
-              <option value="masuk">masuk</option>
-              <option value="keluar">keluar</option>
-              <option value="transfer">transfer</option>
-              <option value="penyesuaian">penyesuaian</option>
+              <option value="masuk">Tambah</option>
+              <option value="keluar">Kurangi</option>
+              <option value="transfer">Transfer</option>
+              <option value="penyesuaian">Penyesuaian (+)</option>
             </select>
           </label>
-          <label>
+          <label v-if="['keluar', 'transfer'].includes(stockForm.jenis_mutasi)">
             <span>Gudang Asal</span>
-            <select v-model="stockForm.gudang_asal_id">
+            <select v-model="stockForm.gudang_asal_id" required>
               <option value="">Pilih</option>
-              <option v-for="gudang in options.gudang" :key="gudang.id" :value="gudang.id">{{ gudang.nama_gudang }}</option>
+              <option v-for="gudang in options.gudang.filter((item) => item.aktif)" :key="gudang.id" :value="gudang.id">{{ gudang.nama_gudang }}</option>
             </select>
           </label>
-          <label>
+          <label v-if="stockForm.jenis_mutasi !== 'keluar'">
             <span>Gudang Tujuan</span>
-            <select v-model="stockForm.gudang_tujuan_id">
+            <select v-model="stockForm.gudang_tujuan_id" required>
               <option value="">Pilih</option>
-              <option v-for="gudang in options.gudang" :key="gudang.id" :value="gudang.id">{{ gudang.nama_gudang }}</option>
+              <option v-for="gudang in options.gudang.filter((item) => item.aktif)" :key="gudang.id" :value="gudang.id">{{ gudang.nama_gudang }}</option>
             </select>
           </label>
           <label>
             <span>Jenis Barang</span>
-            <select v-model="stockForm.jenis_barang" required>
-              <option value="toner">toner</option>
-              <option value="printer">printer</option>
-              <option value="suku_cadang">suku_cadang</option>
-            </select>
+            <input :value="activeStockView.label" type="text" readonly />
           </label>
           <label>
             <span>Barang</span>
@@ -2372,20 +2761,16 @@ onMounted(muatProfil);
             <span>Keterangan</span>
             <textarea v-model="stockForm.keterangan" rows="3" />
           </label>
-          <label class="check-field">
-            <input v-model="stockForm.langsung_posting" type="checkbox" />
-            <span>Langsung posting</span>
-          </label>
-
           <div class="modal-actions">
             <button class="secondary-button" type="button" @click="modalStokTerbuka = false">Batal</button>
             <button class="primary-button" type="submit" :disabled="loading">
               <Save :size="17" />
-              <span>{{ loading ? "Menyimpan..." : "Simpan Mutasi" }}</span>
+              <span>{{ loading ? "Menyimpan..." : "Simpan" }}</span>
             </button>
           </div>
         </form>
       </section>
     </div>
+    <MasterImportDialog v-if="importKind" :kind="importKind" @close="importKind = null" @imported="selesaiImpor" />
   </main>
 </template>

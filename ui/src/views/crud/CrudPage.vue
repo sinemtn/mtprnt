@@ -1,10 +1,11 @@
 <script setup>
-import { Eye, Pencil, Plus, Power, Search, Trash2 } from "lucide-vue-next";
+import { Eye, FileUp, History, Pencil, Plus, Power, Search, Trash2 } from "lucide-vue-next";
 
 defineProps({
   currentConfig: { type: Object, required: true },
   cari: { type: String, required: true },
   canCreate: { type: Boolean, required: true },
+  canImport: { type: Boolean, default: false },
   paginatedItems: { type: Array, required: true },
   filteredItems: { type: Array, required: true },
   pagination: { type: Object, required: true },
@@ -12,6 +13,9 @@ defineProps({
   paginationStart: { type: Number, required: true },
   paginationEnd: { type: Number, required: true },
   loading: { type: Boolean, required: true },
+  totalItems: { type: Number, default: 0 },
+  printerFilters: { type: Object, default: () => ({}) },
+  printerFilterOptions: { type: Object, default: () => ({}) },
   canHardDelete: { type: Boolean, default: false },
   canOpenItem: { type: Function, default: () => true },
   canUpdateItem: { type: Function, default: () => true },
@@ -19,6 +23,7 @@ defineProps({
   canResolveComplaintItem: { type: Function, default: () => true },
   canRunSuratAction: { type: Function, default: () => true },
   canPrintSuratItem: { type: Function, default: () => true },
+  canViewAuditBarang: { type: Boolean, default: false },
   valueOf: { type: Function, required: true },
   badgeClass: { type: Function, required: true },
   labelStatus: { type: Function, required: true }
@@ -35,7 +40,10 @@ defineEmits([
   "deactivate-item",
   "hard-delete-item",
   "previous-page",
-  "next-page"
+  "next-page",
+  "update-printer-filter",
+  "open-history",
+  "open-import"
 ]);
 </script>
 
@@ -51,11 +59,20 @@ defineEmits([
         @keyup.enter="$emit('load-page')"
       />
     </label>
+    <button v-if="canImport" class="secondary-button" type="button" @click="$emit('open-import')"><FileUp :size="16" /><span>Impor Excel</span></button>
     <button v-if="canCreate" class="primary-button" type="button" @click="$emit('open-form')">
       <Plus :size="17" />
       <span>Tambah</span>
     </button>
   </section>
+
+  <div v-if="currentConfig.printerFilters" class="printer-list-filters">
+    <select :value="printerFilters.kategori_id" aria-label="Kategori" @change="$emit('update-printer-filter', 'kategori_id', $event.target.value)"><option value="">Semua kategori</option><option v-for="row in printerFilterOptions.kategori" :key="row.id" :value="row.id">{{ row.nama_kategori }}</option></select>
+    <select :value="printerFilters.model_id" aria-label="Model" @change="$emit('update-printer-filter', 'model_id', $event.target.value)"><option value="">Semua model</option><option v-for="row in printerFilterOptions.model?.filter((item) => !printerFilters.kategori_id || item.kategori_id === printerFilters.kategori_id)" :key="row.id" :value="row.id">{{ row.merek }} {{ row.nama_model }}</option></select>
+    <select v-if="currentConfig.printerFilterFields?.includes('gudang_id')" :value="printerFilters.gudang_id" aria-label="Gudang" @change="$emit('update-printer-filter', 'gudang_id', $event.target.value)"><option value="">Semua gudang</option><option v-for="row in printerFilterOptions.gudang" :key="row.id" :value="row.id">{{ row.nama_gudang }}</option></select>
+    <select v-if="currentConfig.printerFilterFields?.includes('account_id')" :value="printerFilters.account_id" aria-label="Account" @change="$emit('update-printer-filter', 'account_id', $event.target.value)"><option value="">Semua account</option><option v-for="row in printerFilterOptions.account" :key="row.id" :value="row.id">{{ row.nama_account }}</option></select>
+    <select v-if="currentConfig.printerFilterFields?.includes('customer_id')" :value="printerFilters.customer_id" aria-label="Customer" :disabled="!printerFilters.account_id" @change="$emit('update-printer-filter', 'customer_id', $event.target.value)"><option value="">Semua customer</option><option v-for="row in printerFilterOptions.customer" :key="row.id" :value="row.id">{{ row.nama_customer }}</option></select>
+  </div>
 
   <section class="data-panel">
     <div class="table-wrap">
@@ -76,6 +93,7 @@ defineEmits([
             </td>
             <td>
               <div class="row-actions">
+                <button v-if="canViewAuditBarang" class="icon-action" type="button" title="Riwayat barang" aria-label="Riwayat barang" @click="$emit('open-history', item)"><History :size="16" /></button>
                 <button
                   v-if="canOpenItem(item)"
                   class="icon-action"
@@ -153,7 +171,7 @@ defineEmits([
     </div>
     <div class="pagination-bar">
       <div class="pagination-size">
-        <select v-model.number="pagination.pageSize" @change="$emit('reset-pagination')">
+        <select v-model.number="pagination.pageSize" @change="$emit('reset-pagination'); $emit('load-page')">
           <option :value="5">5</option>
           <option :value="10">10</option>
           <option :value="25">25</option>
@@ -161,7 +179,7 @@ defineEmits([
         <span>Baris per halaman</span>
       </div>
       <span class="pagination-range">
-        {{ filteredItems.length ? `Menampilkan ${paginationStart}-${paginationEnd} dari ${filteredItems.length} data` : "0 data" }}
+        {{ totalItems ? `Menampilkan ${paginationStart}-${paginationEnd} dari ${totalItems} data` : "0 data" }}
       </span>
       <div class="pagination-actions">
         <strong>Halaman {{ Math.min(pagination.page, totalPages) }} dari {{ totalPages }}</strong>
@@ -175,3 +193,8 @@ defineEmits([
     </div>
   </section>
 </template>
+
+<style scoped>
+.printer-list-filters { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
+.printer-list-filters select { min-width: 150px; max-width: 230px; flex: 1 1 150px; min-height: 40px; padding: 0 12px; color: #f8fafc; background: #0d1628; border: 1px solid #29364d; border-radius: 6px; }
+</style>

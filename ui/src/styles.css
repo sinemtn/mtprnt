@@ -395,8 +395,19 @@ input::placeholder {
   overflow: hidden;
 }
 
+.submenu-block {
+  display: grid;
+  min-width: 0;
+}
+
+.nested-submenu {
+  margin-left: 16px;
+  padding-left: 9px;
+}
+
 .submenu-item {
   display: inline-flex;
+  width: 100%;
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
@@ -427,12 +438,17 @@ input::placeholder {
 
 .submenu-enter-active,
 .submenu-leave-active {
-  max-height: 280px;
+  max-height: 640px;
   opacity: 1;
   transition:
     max-height 260ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 180ms ease,
     transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nested-submenu.submenu-enter-active,
+.nested-submenu.submenu-leave-active {
+  max-height: 160px;
 }
 
 .submenu-enter-from,
@@ -1189,6 +1205,10 @@ tbody tr:hover {
   background: rgba(2, 6, 23, 0.58);
 }
 
+.confirm-backdrop {
+  z-index: 60;
+}
+
 .modal-panel {
   width: min(100%, 760px);
   height: min(82vh, 720px);
@@ -1309,6 +1329,40 @@ tbody tr:hover {
   gap: 10px;
 }
 
+.site-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.site-panel-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.site-panel-heading strong {
+  color: #f8fafc;
+  font-size: 14px;
+}
+
+.site-panel-heading span,
+.site-default-label {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.site-default-label {
+  margin-left: 8px;
+  color: #67e8f9;
+}
+
+.site-form {
+  flex: none;
+}
+
 .helper-text {
   margin: 0;
   border: 1px solid rgba(148, 163, 184, 0.16);
@@ -1334,6 +1388,16 @@ tbody tr:hover {
   align-content: start;
   gap: 14px 16px;
   padding: 16px 18px;
+}
+
+.form-section-title {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  color: #f8fafc;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .data-form label {

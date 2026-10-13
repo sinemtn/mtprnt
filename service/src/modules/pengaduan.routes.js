@@ -8,6 +8,7 @@ const { autentikasi, otorisasi } = require("../middlewares/auth");
 const { normalisasiRole } = require("../utils/roles");
 const { aksiDariStatus, catatAudit } = require("./audit.service");
 const { terapkanSlaPendingKomplain } = require("./sla.service");
+const { pastikanCustomerAccount } = require("./account.service");
 
 const router = express.Router();
 
@@ -23,10 +24,10 @@ const LEGACY_STATUS_PENGADUAN = ["baru", "ditugaskan", "diproses", "selesai", "d
 const pengaduanBuatSchema = z.object({
   nomor_pengaduan: z.string().optional(),
   mp_no: z.string().optional().nullable(),
-  pelanggan_id: z.string().uuid(),
-  lokasi_pelanggan_id: z.string().uuid().optional().nullable(),
+  account_id: z.string().uuid(),
+  customer_id: z.string().uuid(),
   sales_id: z.string().uuid().optional().nullable(),
-  printer_terpasang_id: z.string().uuid().optional().nullable(),
+  printer_id: z.string().uuid().optional().nullable(),
   nama_pelapor: z.string().min(1),
   telepon_pelapor: z.string().optional().nullable(),
   tanggal_pengaduan: z.string().optional().nullable(),
@@ -85,23 +86,6 @@ function dataPengaduan(body) {
   if ("batas_respon" in data) data.batas_respon = data.batas_respon ? new Date(data.batas_respon) : null;
   if ("batas_penyelesaian" in data) data.batas_penyelesaian = data.batas_penyelesaian ? new Date(data.batas_penyelesaian) : null;
   return data;
-}
-
-async function pastikanCabangJikaMultisite(tx, pelangganId, lokasiId) {
-  if (!pelangganId) return;
-  const pelanggan = await tx.master_pelanggan.findUnique({ where: { id: pelangganId } });
-  if (!pelanggan) {
-    throw Object.assign(new Error("Customer tidak ditemukan."), { statusCode: 404 });
-  }
-  if (pelanggan?.jenis_pelanggan === "multisite" && !lokasiId) {
-    throw Object.assign(new Error("Cabang customer wajib diisi untuk customer multisite."), { statusCode: 422 });
-  }
-  if (pelanggan.jenis_pelanggan === "single") return pelanggan;
-  const lokasi = await tx.master_lokasi_pelanggan.findUnique({ where: { id: lokasiId } });
-  if (!lokasi || lokasi.pelanggan_id !== pelangganId) {
-    throw Object.assign(new Error("Cabang customer tidak sesuai dengan customer yang dipilih."), { statusCode: 422 });
-  }
-  return pelanggan;
 }
 
 router.get("/", otorisasi("sales", "sales-admin", "kepala-teknisi", "teknisi", "warehouse"), asyncHandler(async (req, res) => {
@@ -177,8 +161,14 @@ router.post("/", otorisasi("sales-admin"), asyncHandler(async (req, res) => {
     return gagal(res, "Status awal komplain hanya boleh new atau pending.", 422);
   }
   const hasil = await prisma.$transaction(async (tx) => {
-    const pelanggan = await pastikanCabangJikaMultisite(tx, body.pelanggan_id, body.lokasi_pelanggan_id);
-    if (pelanggan?.jenis_pelanggan === "single") body.lokasi_pelanggan_id = null;
+    await pastikanCustomerAccount(tx, body.account_id, body.customer_id);
+    if (body.printer_id) {
+      const printer = await tx.master_printer.findUnique({ where: { id: body.printer_id } });
+      if (!printer || printer.status !== "installed" || printer.account_id !== body.account_id || printer.customer_id !== body.customer_id) {
+        throw Object.assign(new Error("Pilih printer terpasang milik Customer ini."), { statusCode: 422 });
+      }
+      body.mp_no = printer.mp_no;
+    }
     const nomorPengaduan = body.nomor_pengaduan || buatNomor("PGD");
     const item = await tx.pengaduan.create({
       data: {
@@ -215,8 +205,17 @@ router.put("/:id", otorisasi(), asyncHandler(async (req, res) => {
   const hasil = await prisma.$transaction(async (tx) => {
     const sebelum = await tx.pengaduan.findUnique({ where: { id: req.params.id } });
     if (!sebelum) return null;
-    const pelanggan = await pastikanCabangJikaMultisite(tx, body.pelanggan_id || sebelum.pelanggan_id, body.lokasi_pelanggan_id ?? sebelum.lokasi_pelanggan_id);
-    if (pelanggan?.jenis_pelanggan === "single") body.lokasi_pelanggan_id = null;
+    const accountId = body.account_id || sebelum.account_id;
+    const customerId = body.customer_id || sebelum.customer_id;
+    await pastikanCustomerAccount(tx, accountId, customerId, accountId !== sebelum.account_id || customerId !== sebelum.customer_id);
+    const printerId = body.printer_id === undefined ? sebelum.printer_id : body.printer_id;
+    if (printerId) {
+      const printer = await tx.master_printer.findUnique({ where: { id: printerId } });
+      if (!printer || printer.status !== "installed" || printer.account_id !== accountId || printer.customer_id !== customerId) {
+        throw Object.assign(new Error("Pilih printer terpasang milik Customer ini."), { statusCode: 422 });
+      }
+      body.mp_no = printer.mp_no;
+    }
 
     const sesudah = await tx.pengaduan.update({
       where: { id: req.params.id },

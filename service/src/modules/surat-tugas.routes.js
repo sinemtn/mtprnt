@@ -8,6 +8,8 @@ const { autentikasi, otorisasi } = require("../middlewares/auth");
 const { normalisasiRole } = require("../utils/roles");
 const { kurangiStok } = require("./stok.service");
 const { aksiDariStatus, catatAudit } = require("./audit.service");
+const { catatAuditBarang } = require("./audit-barang.service");
+const { pastikanCustomerAccount } = require("./account.service");
 
 const router = express.Router();
 
@@ -18,9 +20,9 @@ const suratTugasSchema = z.object({
   nomor_surat_tugas: z.string().optional(),
   pengaduan_id: z.string().uuid().optional().nullable(),
   mp_no: z.string().optional().nullable(),
-  pelanggan_id: z.string().uuid(),
-  lokasi_pelanggan_id: z.string().uuid().optional().nullable(),
-  printer_terpasang_id: z.string().uuid().optional().nullable(),
+  account_id: z.string().uuid(),
+  customer_id: z.string().uuid(),
+  printer_id: z.string().uuid().optional().nullable(),
   pic_teknisi_id: z.string().uuid().optional().nullable(),
   tanggal_jadwal: z.string().optional().nullable(),
   mulai_kunjungan: z.string().optional().nullable(),
@@ -131,66 +133,44 @@ async function simpanPicTeknisi(tx, suratId, picTeknisiId) {
   });
 }
 
-async function pastikanCabangJikaMultisite(tx, pelangganId, lokasiId) {
-  if (!pelangganId) return;
-  const pelanggan = await tx.master_pelanggan.findUnique({ where: { id: pelangganId } });
-  if (!pelanggan) {
-    throw Object.assign(new Error("Customer tidak ditemukan."), { statusCode: 404 });
-  }
-  if (pelanggan?.jenis_pelanggan === "multisite" && !lokasiId) {
-    throw Object.assign(new Error("Cabang customer wajib diisi untuk customer multisite."), { statusCode: 422 });
-  }
-  if (pelanggan.jenis_pelanggan === "single") return pelanggan;
-  const lokasi = await tx.master_lokasi_pelanggan.findUnique({ where: { id: lokasiId } });
-  if (!lokasi || lokasi.pelanggan_id !== pelangganId) {
-    throw Object.assign(new Error("Cabang customer tidak sesuai dengan customer yang dipilih."), { statusCode: 422 });
-  }
-  return pelanggan;
-}
-
 function pekerjaanMemasangPrinter(jenisPekerjaan) {
   return ["installation", "install", "instalasi", "delivery", "replacement", "penggantian"].includes(String(jenisPekerjaan || "").toLowerCase());
 }
 
-function nomorSeriTerpasang(surat, line) {
-  return String(line.serial_number || surat.mp_no || `${surat.nomor_surat_tugas}-${line.id.slice(0, 8)}`).trim();
-}
-
-async function sinkronPrinterTerpasangDariSurat(tx, surat, pemakaian) {
+async function sinkronPrinterTerpasangDariSurat(tx, req, surat, pemakaian) {
   if (!pekerjaanMemasangPrinter(surat.jenis_pekerjaan)) return [];
 
   const printerLines = pemakaian.filter((line) => line.jenis_barang === "printer" && line.printer_id);
   const hasil = [];
+  const customer = await tx.master_customer.findUnique({ where: { id: surat.customer_id }, select: { nama_customer: true } });
 
   for (const line of printerLines) {
-    const nomor_seri = nomorSeriTerpasang(surat, line);
-    const data = {
-      pelanggan_id: surat.pelanggan_id,
-      lokasi_pelanggan_id: surat.lokasi_pelanggan_id || null,
-      printer_id: line.printer_id,
-      nomor_seri,
-      lokasi_detail: line.keterangan || surat.hasil || surat.catatan_masalah || null,
-      tanggal_instalasi: surat.selesai_kunjungan || new Date(),
-      status: "aktif",
-      tanggal_diperbarui: new Date()
-    };
-
-    const existing = await tx.master_printer_terpasang.findUnique({
-      where: { nomor_seri }
+    const sebelum = await tx.master_printer.findUnique({ where: { id: line.printer_id } });
+    const changed = await tx.master_printer.updateMany({
+      where: { id: line.printer_id, status: "issued", surat_tugas_aktif_id: surat.id },
+      data: {
+        account_id: surat.account_id,
+        customer_id: surat.customer_id,
+        gudang_id: null,
+        surat_tugas_aktif_id: null,
+        lokasi_detail: customer?.nama_customer || null,
+        tanggal_instalasi: surat.selesai_kunjungan || new Date(),
+        status: "installed",
+        tanggal_diperbarui: new Date()
+      }
     });
+    if (changed.count !== 1) throw Object.assign(new Error("Unit printer belum divalidasi Warehouse atau sudah dikembalikan."), { statusCode: 409 });
 
-    const printerTerpasang = existing
-      ? await tx.master_printer_terpasang.update({
-        where: { id: existing.id },
-        data
-      })
-      : await tx.master_printer_terpasang.create({
-        data
-      });
+    const printerTerpasang = await tx.master_printer.findUnique({ where: { id: line.printer_id } });
+    await catatAuditBarang(tx, req, {
+      jenis_barang: "printer", aksi: "pasang_customer", sebelum, sesudah: printerTerpasang,
+      referensi: { jenis: "surat_tugas", id: surat.id, nomor: surat.nomor_surat_tugas },
+      keterangan: "Unit printer dipasang di customer."
+    });
 
     await tx.surat_tugas.update({
       where: { id: surat.id },
-      data: { printer_terpasang_id: printerTerpasang.id }
+      data: { printer_id: printerTerpasang.id }
     });
 
     hasil.push(printerTerpasang);
@@ -200,9 +180,9 @@ async function sinkronPrinterTerpasangDariSurat(tx, surat, pemakaian) {
 }
 
 const suratTugasInclude = {
-  master_pelanggan: true,
-  master_lokasi_pelanggan: true,
-  master_printer_terpasang: true,
+  master_account: true,
+  master_customer: true,
+  master_printer: { include: { master_printer_model: true } },
   pengaduan: true,
   master_pengguna_surat_tugas_dibuat_olehTomaster_pengguna: true,
   master_pengguna_surat_tugas_disetujui_olehTomaster_pengguna: true,
@@ -216,7 +196,7 @@ const suratTugasInclude = {
   pemakaian_barang_surat_tugas: {
     include: {
       master_gudang: true,
-      master_printer: true,
+      master_printer: { include: { master_printer_model: true } },
       master_toner: true,
       master_suku_cadang: true
     }
@@ -268,12 +248,25 @@ router.get("/:id", otorisasi("sales", "sales-admin", "kepala-teknisi", "teknisi"
 router.post("/", otorisasi("kepala-teknisi"), asyncHandler(async (req, res) => {
   hanyaRole(req, ["kepala_teknisi"]);
   const body = suratTugasSchema.parse(req.body);
+  if (body.status && body.status !== "pending") return gagal(res, "Surat tugas baru harus berstatus pending.", 422);
   if (!body.pic_teknisi_id) {
     return gagal(res, "PIC teknisi wajib diisi.", 422);
   }
   const item = await prisma.$transaction(async (tx) => {
-    const pelanggan = await pastikanCabangJikaMultisite(tx, body.pelanggan_id, body.lokasi_pelanggan_id);
-    if (pelanggan?.jenis_pelanggan === "single") body.lokasi_pelanggan_id = null;
+    await pastikanCustomerAccount(tx, body.account_id, body.customer_id);
+    if (body.pengaduan_id) {
+      const pengaduan = await tx.pengaduan.findUnique({ where: { id: body.pengaduan_id } });
+      if (!pengaduan || pengaduan.account_id !== body.account_id || pengaduan.customer_id !== body.customer_id) {
+        throw Object.assign(new Error("Account dan Customer harus sesuai dengan komplain terkait."), { statusCode: 422 });
+      }
+    }
+    if (body.printer_id) {
+      const printer = await tx.master_printer.findUnique({ where: { id: body.printer_id } });
+      if (!printer || printer.status !== "installed" || printer.account_id !== body.account_id || printer.customer_id !== body.customer_id) {
+        throw Object.assign(new Error("Pilih printer terpasang milik Customer ini."), { statusCode: 422 });
+      }
+      body.mp_no = printer.mp_no;
+    }
     const surat = await tx.surat_tugas.create({
       data: {
         ...dataSuratTugas(body),
@@ -313,19 +306,66 @@ router.put("/:id", otorisasi("kepala-teknisi", "teknisi"), asyncHandler(async (r
   const item = await prisma.$transaction(async (tx) => {
     const sebelum = await tx.surat_tugas.findUnique({ where: { id: req.params.id } });
     if (!sebelum) return null;
+    if (body.status && body.status !== sebelum.status && body.status !== "cancelled") {
+      throw Object.assign(new Error("Gunakan aksi workflow untuk mengubah status surat tugas."), { statusCode: 409 });
+    }
+    const printerItems = await tx.pemakaian_barang_surat_tugas.count({ where: { surat_tugas_id: sebelum.id, jenis_barang: "printer" } });
+    if (printerItems && ((body.account_id && body.account_id !== sebelum.account_id) || (body.customer_id && body.customer_id !== sebelum.customer_id))) {
+      throw Object.assign(new Error("Account/Customer tidak bisa diganti setelah unit printer ditambahkan."), { statusCode: 409 });
+    }
+    if (printerItems && body.jenis_pekerjaan && !pekerjaanMemasangPrinter(body.jenis_pekerjaan)) {
+      throw Object.assign(new Error("Surat tugas dengan unit printer harus tetap bertipe instalasi, delivery, atau penggantian."), { statusCode: 409 });
+    }
     if (rolePengguna(req) !== "admin") {
       delete body.status;
     }
     if (rolePengguna(req) === "teknisi") {
       await assertTeknisiAssigned(tx, req, sebelum.id);
       delete body.pengaduan_id;
-      delete body.pelanggan_id;
-      delete body.lokasi_pelanggan_id;
-      delete body.printer_terpasang_id;
+      delete body.account_id;
+      delete body.customer_id;
+      delete body.printer_id;
       delete body.status;
     }
-    const pelanggan = await pastikanCabangJikaMultisite(tx, body.pelanggan_id || sebelum.pelanggan_id, body.lokasi_pelanggan_id ?? sebelum.lokasi_pelanggan_id);
-    if (pelanggan?.jenis_pelanggan === "single") body.lokasi_pelanggan_id = null;
+    const accountId = body.account_id || sebelum.account_id;
+    const customerId = body.customer_id || sebelum.customer_id;
+    await pastikanCustomerAccount(tx, accountId, customerId, accountId !== sebelum.account_id || customerId !== sebelum.customer_id);
+    const pengaduanId = body.pengaduan_id === undefined ? sebelum.pengaduan_id : body.pengaduan_id;
+    if (pengaduanId) {
+      const pengaduan = await tx.pengaduan.findUnique({ where: { id: pengaduanId } });
+      if (!pengaduan || pengaduan.account_id !== (body.account_id || sebelum.account_id) || pengaduan.customer_id !== (body.customer_id || sebelum.customer_id)) {
+        throw Object.assign(new Error("Account dan Customer harus sesuai dengan komplain terkait."), { statusCode: 422 });
+      }
+    }
+    const targetPrinterId = body.printer_id === undefined ? sebelum.printer_id : body.printer_id;
+    if (targetPrinterId) {
+      const printer = await tx.master_printer.findUnique({ where: { id: targetPrinterId } });
+      if (!printer || printer.status !== "installed" || printer.account_id !== accountId || printer.customer_id !== customerId) {
+        throw Object.assign(new Error("Pilih printer terpasang milik Customer ini."), { statusCode: 422 });
+      }
+      body.mp_no = printer.mp_no;
+    }
+    if (body.status === "cancelled") {
+      if (sebelum.status === "solved") throw Object.assign(new Error("Surat tugas yang selesai tidak bisa dibatalkan."), { statusCode: 409 });
+      const issued = await tx.master_printer.count({ where: { surat_tugas_aktif_id: sebelum.id, status: "issued" } });
+      if (issued) throw Object.assign(new Error("Kembalikan unit printer ke Gudang sebelum membatalkan surat tugas."), { statusCode: 409 });
+      if (["warehouse_validated"].includes(sebelum.status) && await tx.pemakaian_barang_surat_tugas.count({ where: { surat_tugas_id: sebelum.id, jenis_barang: { not: "printer" } } })) {
+        throw Object.assign(new Error("Barang toner/sparepart yang sudah diposting harus diretur sebelum surat tugas dibatalkan."), { statusCode: 409 });
+      }
+      const reserved = await tx.master_printer.findMany({ where: { surat_tugas_aktif_id: sebelum.id, status: "reserved" } });
+      await tx.master_printer.updateMany({
+        where: { surat_tugas_aktif_id: sebelum.id, status: "reserved" },
+        data: { status: "available", surat_tugas_aktif_id: null, tanggal_diperbarui: new Date() }
+      });
+      for (const unit of reserved) {
+        const released = await tx.master_printer.findUnique({ where: { id: unit.id } });
+        await catatAuditBarang(tx, req, {
+          jenis_barang: "printer", aksi: "lepas_reservasi", sebelum: unit, sesudah: released,
+          referensi: { jenis: "surat_tugas", id: sebelum.id, nomor: sebelum.nomor_surat_tugas },
+          keterangan: "Reservasi unit dilepas karena surat tugas dibatalkan."
+        });
+      }
+    }
 
     const sesudah = await tx.surat_tugas.update({
       where: { id: req.params.id },
@@ -407,6 +447,34 @@ router.post("/:id/pemakaian", otorisasi("teknisi"), asyncHandler(async (req, res
     await assertTeknisiAssigned(tx, req, surat.id);
     assertStatus(surat.status, ["progress", "ready_to_print"], "Item hanya bisa ditambahkan saat surat tugas progress atau ready_to_print.");
 
+    if (body.jenis_barang === "printer") {
+      if (!pekerjaanMemasangPrinter(surat.jenis_pekerjaan)) {
+        throw Object.assign(new Error("Unit printer gudang hanya bisa dibawa untuk instalasi, delivery, atau penggantian."), { statusCode: 422 });
+      }
+      if (!body.printer_id || body.jumlah_pakai !== 1) {
+        throw Object.assign(new Error("Pilih satu unit printer (kuantitas 1)."), { statusCode: 422 });
+      }
+      const printer = await tx.master_printer.findUnique({ where: { id: body.printer_id } });
+      if (!printer || printer.status !== "available" || printer.gudang_id !== body.gudang_id) {
+        throw Object.assign(new Error("Unit printer tidak tersedia di Gudang yang dipilih."), { statusCode: 409 });
+      }
+      if (body.serial_number && body.serial_number !== printer.serial_number) {
+        throw Object.assign(new Error("Serial Number harus sesuai dengan unit printer."), { statusCode: 422 });
+      }
+      const claimed = await tx.master_printer.updateMany({
+        where: { id: printer.id, status: "available", gudang_id: body.gudang_id },
+        data: { status: "reserved", surat_tugas_aktif_id: surat.id, tanggal_diperbarui: new Date() }
+      });
+      if (claimed.count !== 1) throw Object.assign(new Error("Unit printer sudah direservasi."), { statusCode: 409 });
+      const reserved = await tx.master_printer.findUnique({ where: { id: printer.id } });
+      await catatAuditBarang(tx, req, {
+        jenis_barang: "printer", aksi: "reservasi", sebelum: printer, sesudah: reserved,
+        referensi: { jenis: "surat_tugas", id: surat.id, nomor: surat.nomor_surat_tugas },
+        keterangan: "Unit printer direservasi untuk surat tugas."
+      });
+      body.serial_number = printer.serial_number;
+    }
+
     const pemakaian = await tx.pemakaian_barang_surat_tugas.create({
       data: {
         surat_tugas_id: req.params.id,
@@ -447,6 +515,21 @@ router.delete("/:id/pemakaian/:pemakaianId", otorisasi("teknisi"), asyncHandler(
     });
     if (!pemakaian) {
       throw Object.assign(new Error("Item surat tugas tidak ditemukan."), { statusCode: 404 });
+    }
+
+    if (pemakaian.jenis_barang === "printer") {
+      const sebelum = await tx.master_printer.findUnique({ where: { id: pemakaian.printer_id } });
+      const released = await tx.master_printer.updateMany({
+        where: { id: pemakaian.printer_id, status: "reserved", surat_tugas_aktif_id: surat.id },
+        data: { status: "available", surat_tugas_aktif_id: null, tanggal_diperbarui: new Date() }
+      });
+      if (released.count !== 1) throw Object.assign(new Error("Unit printer tidak bisa dilepas dari surat tugas ini."), { statusCode: 409 });
+      const sesudah = await tx.master_printer.findUnique({ where: { id: pemakaian.printer_id } });
+      await catatAuditBarang(tx, req, {
+        jenis_barang: "printer", aksi: "lepas_reservasi", sebelum, sesudah,
+        referensi: { jenis: "surat_tugas", id: surat.id, nomor: surat.nomor_surat_tugas },
+        keterangan: "Item printer dihapus dari surat tugas."
+      });
     }
 
     await tx.pemakaian_barang_surat_tugas.delete({ where: { id: pemakaian.id } });
@@ -529,6 +612,18 @@ router.post("/:id/validasi-warehouse", otorisasi("warehouse"), asyncHandler(asyn
       throw Object.assign(new Error("Warehouse hanya validasi surat tugas yang memiliki item/barang."), { statusCode: 409 });
     }
 
+    const claimed = await tx.surat_tugas.updateMany({
+      where: { id: surat.id, status: "technician_completed" },
+      data: {
+        status: "warehouse_validated",
+        validasi_warehouse_oleh: req.pengguna.id,
+        validasi_warehouse_pada: new Date()
+      }
+    });
+    if (claimed.count !== 1) {
+      throw Object.assign(new Error("Surat tugas sudah divalidasi Warehouse."), { statusCode: 409 });
+    }
+
     const mutasi = await tx.mutasi_stok.create({
       data: {
         nomor_mutasi: buatNomor("PMK"),
@@ -545,7 +640,41 @@ router.post("/:id/validasi-warehouse", otorisasi("warehouse"), asyncHandler(asyn
 
     for (const line of pemakaian) {
       const itemId = line.toner_id || line.printer_id || line.suku_cadang_id;
-      await kurangiStok(tx, line.jenis_barang, line.gudang_id, itemId, line.jumlah_pakai);
+      if (line.jenis_barang === "printer") {
+        const sebelum = await tx.master_printer.findUnique({ where: { id: line.printer_id } });
+        const issued = await tx.master_printer.updateMany({
+          where: { id: line.printer_id, status: "reserved", surat_tugas_aktif_id: surat.id, gudang_id: line.gudang_id },
+          data: { status: "issued", tanggal_diperbarui: new Date() }
+        });
+        if (issued.count !== 1) throw Object.assign(new Error("Unit printer tidak lagi tersedia untuk surat tugas ini."), { statusCode: 409 });
+        const sesudah = await tx.master_printer.findUnique({ where: { id: line.printer_id } });
+        await catatAuditBarang(tx, req, {
+          jenis_barang: "printer", aksi: "keluar_gudang", sebelum, sesudah,
+          referensi: { jenis: "surat_tugas", id: surat.id, nomor: surat.nomor_surat_tugas, mutasi_stok_id: mutasi.id },
+          keterangan: "Unit printer dikeluarkan setelah validasi Warehouse."
+        });
+      } else {
+        await kurangiStok(tx, line.jenis_barang, line.gudang_id, itemId, line.jumlah_pakai);
+        const stockModel = line.jenis_barang === "toner" ? "stok_toner" : "stok_suku_cadang";
+        const itemModel = line.jenis_barang === "toner" ? "master_toner" : "master_suku_cadang";
+        const itemField = line.jenis_barang === "toner" ? "toner_id" : "suku_cadang_id";
+        const [master, stock, gudang] = await Promise.all([
+          tx[itemModel].findUnique({ where: { id: itemId } }),
+          tx[stockModel].findFirst({ where: { gudang_id: line.gudang_id, [itemField]: itemId } }),
+          tx.master_gudang.findUnique({ where: { id: line.gudang_id }, select: { nama_gudang: true } })
+        ]);
+        const saldoSesudah = Number(stock.jumlah_tersedia);
+        const jumlah = Number(line.jumlah_pakai);
+        const lokasi = { gudang_id: line.gudang_id, nama_gudang: gudang?.nama_gudang || null };
+        await catatAuditBarang(tx, req, {
+          jenis_barang: line.jenis_barang, aksi: "pemakaian",
+          sebelum: { ...master, stok: [{ ...lokasi, jumlah_tersedia: saldoSesudah + jumlah }] },
+          sesudah: { ...master, stok: [{ ...lokasi, jumlah_tersedia: saldoSesudah }] },
+          perubahan: { jenis_mutasi: "pemakaian", jumlah, gudang_asal_id: line.gudang_id, gudang_tujuan_id: null },
+          referensi: { jenis: "surat_tugas", id: surat.id, nomor: surat.nomor_surat_tugas, mutasi_stok_id: mutasi.id },
+          keterangan: line.keterangan || "Barang dipakai pada surat tugas."
+        });
+      }
       await tx.detail_mutasi_stok.create({
         data: {
           mutasi_stok_id: mutasi.id,
@@ -559,14 +688,7 @@ router.post("/:id/validasi-warehouse", otorisasi("warehouse"), asyncHandler(asyn
       });
     }
 
-    const sesudah = await tx.surat_tugas.update({
-      where: { id: surat.id },
-      data: {
-        status: "warehouse_validated",
-        validasi_warehouse_oleh: req.pengguna.id,
-        validasi_warehouse_pada: new Date()
-      }
-    });
+    const sesudah = await tx.surat_tugas.findUnique({ where: { id: surat.id } });
 
     await catatStatusSurat(tx, req, { ...surat, pemakaian }, sesudah, "validasi_warehouse", "Warehouse validasi barang dan stok pemakaian diposting.", { pemakaian, mutasi_stok_id: mutasi.id });
 
@@ -604,7 +726,7 @@ router.post("/:id/resolve", otorisasi("kepala-teknisi"), asyncHandler(async (req
       }
     });
 
-    const printerTerpasang = await sinkronPrinterTerpasangDariSurat(tx, sesudah, pemakaian);
+    const printerTerpasang = await sinkronPrinterTerpasangDariSurat(tx, req, sesudah, pemakaian);
 
     await catatStatusSurat(tx, req, { ...sebelum, pemakaian }, sesudah, "resolve", "Surat tugas diselesaikan kepala teknisi.", { pemakaian, printer_terpasang: printerTerpasang });
 

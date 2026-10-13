@@ -1,36 +1,14 @@
 const express = require("express");
-const { z } = require("zod");
 const prisma = require("../config/prisma");
 const asyncHandler = require("../utils/async-handler");
 const { sukses, gagal } = require("../utils/response");
 const { buatNomor } = require("../utils/nomor");
 const { autentikasi, izin } = require("../middlewares/auth");
 const { terapkanMutasi } = require("./stok.service");
+const { mutasiSchema } = require("./stok.schema");
 const { catatAudit } = require("./audit.service");
 
 const router = express.Router();
-
-const lineSchema = z.object({
-  jenis_barang: z.enum(["toner", "printer", "suku_cadang"]),
-  toner_id: z.string().uuid().optional().nullable(),
-  printer_id: z.string().uuid().optional().nullable(),
-  suku_cadang_id: z.string().uuid().optional().nullable(),
-  jumlah: z.number().positive(),
-  satuan: z.string().optional(),
-  keterangan: z.string().optional().nullable()
-});
-
-const mutasiSchema = z.object({
-  nomor_mutasi: z.string().optional(),
-  jenis_mutasi: z.enum(["masuk", "keluar", "transfer", "penyesuaian", "pemakaian"]),
-  gudang_asal_id: z.string().uuid().optional().nullable(),
-  gudang_tujuan_id: z.string().uuid().optional().nullable(),
-  jenis_referensi: z.string().optional().nullable(),
-  referensi_id: z.string().uuid().optional().nullable(),
-  keterangan: z.string().optional().nullable(),
-  detail: z.array(lineSchema).min(1),
-  langsung_posting: z.boolean().optional()
-});
 
 router.use(autentikasi);
 
@@ -75,7 +53,7 @@ router.post("/", izin("stock_data", "create", "warehouse"), asyncHandler(async (
     });
 
     if (body.langsung_posting) {
-      await terapkanMutasi(tx, mutasi, body.detail);
+      await terapkanMutasi(tx, mutasi, body.detail, req);
     }
 
     await catatAudit(tx, req, {
@@ -104,12 +82,16 @@ router.post("/:id/posting", izin("stock_data", "workflow", "warehouse"), asyncHa
     }
 
     const detail = await tx.detail_mutasi_stok.findMany({ where: { mutasi_stok_id: mutasi.id } });
-    await terapkanMutasi(tx, mutasi, detail);
-
-    const sesudah = await tx.mutasi_stok.update({
-      where: { id: mutasi.id },
+    const claimed = await tx.mutasi_stok.updateMany({
+      where: { id: mutasi.id, status: "draft" },
       data: { status: "terposting", tanggal_terposting: new Date() }
     });
+    if (claimed.count !== 1) {
+      throw Object.assign(new Error("Mutasi stok sudah diproses."), { statusCode: 409 });
+    }
+    await terapkanMutasi(tx, mutasi, detail, req);
+
+    const sesudah = await tx.mutasi_stok.findUnique({ where: { id: mutasi.id } });
 
     await catatAudit(tx, req, {
       jenis_dokumen: "mutasi_stok",

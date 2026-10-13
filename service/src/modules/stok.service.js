@@ -1,23 +1,21 @@
 const { Prisma } = require("@prisma/client");
+const { catatAuditBarang } = require("./audit-barang.service");
 
 const tabelStok = {
   toner: {
     tabel: "stok_toner",
-    kolomItem: "toner_id"
-  },
-  printer: {
-    tabel: "stok_printer",
-    kolomItem: "printer_id"
+    kolomItem: "toner_id",
+    master: "master_toner"
   },
   suku_cadang: {
     tabel: "stok_suku_cadang",
-    kolomItem: "suku_cadang_id"
+    kolomItem: "suku_cadang_id",
+    master: "master_suku_cadang"
   }
 };
 
 function ambilItemId(line) {
   if (line.jenis_barang === "toner") return line.toner_id;
-  if (line.jenis_barang === "printer") return line.printer_id;
   return line.suku_cadang_id;
 }
 
@@ -56,9 +54,13 @@ async function kurangiStok(tx, jenis_barang, gudang_id, item_id, jumlah) {
   }
 }
 
-async function terapkanMutasi(tx, mutasi, lines) {
+async function terapkanMutasi(tx, mutasi, lines, req) {
   for (const line of lines) {
     const itemId = ambilItemId(line);
+    const jumlah = Number(line.jumlah);
+    const asalId = ["keluar", "pemakaian", "transfer"].includes(mutasi.jenis_mutasi) ? mutasi.gudang_asal_id : null;
+    const tujuanId = ["masuk", "transfer", "penyesuaian"].includes(mutasi.jenis_mutasi)
+      ? mutasi.gudang_tujuan_id || mutasi.gudang_asal_id : null;
     if (mutasi.jenis_mutasi === "masuk") {
       await tambahStok(tx, line.jenis_barang, mutasi.gudang_tujuan_id, itemId, line.jumlah);
     }
@@ -79,6 +81,35 @@ async function terapkanMutasi(tx, mutasi, lines) {
         await kurangiStok(tx, line.jenis_barang, mutasi.gudang_asal_id || mutasi.gudang_tujuan_id, itemId, Math.abs(Number(line.jumlah)));
       }
     }
+
+    const cfg = tabelStok[line.jenis_barang];
+    const master = await tx[cfg.master].findUnique({ where: { id: itemId } });
+    const gudangIds = [...new Set([asalId, tujuanId].filter(Boolean))];
+    const [stocks, gudangs] = await Promise.all([
+      tx[cfg.tabel].findMany({ where: { [cfg.kolomItem]: itemId, gudang_id: { in: gudangIds } } }),
+      tx.master_gudang.findMany({ where: { id: { in: gudangIds } }, select: { id: true, nama_gudang: true } })
+    ]);
+    const stokSesudah = gudangIds.map((id) => ({
+      gudang_id: id,
+      nama_gudang: gudangs.find((gudang) => gudang.id === id)?.nama_gudang || null,
+      jumlah_tersedia: Number(stocks.find((stock) => stock.gudang_id === id)?.jumlah_tersedia || 0)
+    }));
+    const delta = (id) => {
+      if (mutasi.jenis_mutasi === "transfer") return id === asalId ? -jumlah : jumlah;
+      if (["keluar", "pemakaian"].includes(mutasi.jenis_mutasi)) return -jumlah;
+      if (mutasi.jenis_mutasi === "penyesuaian") return Number(line.jumlah);
+      return jumlah;
+    };
+    const stokSebelum = stokSesudah.map((stock) => ({ ...stock, jumlah_tersedia: stock.jumlah_tersedia - delta(stock.gudang_id) }));
+    await catatAuditBarang(tx, req, {
+      jenis_barang: line.jenis_barang,
+      aksi: mutasi.jenis_mutasi,
+      sebelum: { ...master, stok: stokSebelum },
+      sesudah: { ...master, stok: stokSesudah },
+      perubahan: { jenis_mutasi: mutasi.jenis_mutasi, jumlah, gudang_asal_id: asalId, gudang_tujuan_id: tujuanId },
+      referensi: { jenis: "mutasi_stok", id: mutasi.id, nomor: mutasi.nomor_mutasi, surat_tugas_id: mutasi.jenis_referensi === "surat_tugas" ? mutasi.referensi_id : null },
+      keterangan: line.keterangan || mutasi.keterangan || "Mutasi stok terposting."
+    });
   }
 }
 

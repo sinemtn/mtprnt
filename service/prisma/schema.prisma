@@ -65,7 +65,7 @@ model master_gudang {
   mutasi_stok_mutasi_stok_gudang_asal_idTomaster_gudang   mutasi_stok[]                  @relation("mutasi_stok_gudang_asal_idTomaster_gudang")
   mutasi_stok_mutasi_stok_gudang_tujuan_idTomaster_gudang mutasi_stok[]                  @relation("mutasi_stok_gudang_tujuan_idTomaster_gudang")
   pemakaian_barang_surat_tugas                            pemakaian_barang_surat_tugas[]
-  stok_printer                                            stok_printer[]
+  master_printer                                         master_printer[]
   stok_suku_cadang                                        stok_suku_cadang[]
   stok_toner                                              stok_toner[]
 
@@ -75,7 +75,7 @@ model master_gudang {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model master_kontrak {
   id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  lokasi_pelanggan_id     String                  @db.Uuid
+  customer_id             String                  @db.Uuid
   nomor_kontrak           String                  @unique @db.VarChar(100)
   tanggal_mulai           DateTime                @db.Date
   tanggal_selesai         DateTime                @db.Date
@@ -86,49 +86,46 @@ model master_kontrak {
   keterangan              String?
   tanggal_dibuat          DateTime                @default(now()) @db.Timestamptz(6)
   tanggal_diperbarui      DateTime                @default(now()) @db.Timestamptz(6)
-  master_lokasi_pelanggan master_lokasi_pelanggan @relation(fields: [lokasi_pelanggan_id], references: [id], onUpdate: NoAction)
+  master_customer         master_customer         @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
 
-  @@index([lokasi_pelanggan_id], map: "idx_kontrak_lokasi")
+  @@index([customer_id], map: "idx_kontrak_customer")
 }
 
-model master_lokasi_pelanggan {
+model master_customer {
   id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  pelanggan_id             String                     @db.Uuid
-  kode_lokasi              String                     @db.VarChar(50)
-  nama_lokasi              String                     @db.VarChar(200)
+  account_id               String                     @db.Uuid
+  kode_customer            String                     @db.VarChar(50)
+  nama_customer            String                     @db.VarChar(200)
   alamat                   String
-  kota                     String?                    @db.VarChar(100)
   nama_pic                 String?                    @db.VarChar(150)
   telepon_pic              String?                    @db.VarChar(50)
   email_pic                String?                    @db.VarChar(150)
-  lokasi_default           Boolean                    @default(false)
   aktif                    Boolean                    @default(true)
   tanggal_dibuat           DateTime                   @default(now()) @db.Timestamptz(6)
   tanggal_diperbarui       DateTime                   @default(now()) @db.Timestamptz(6)
   master_kontrak           master_kontrak[]
-  master_pelanggan         master_pelanggan           @relation(fields: [pelanggan_id], references: [id], onUpdate: NoAction)
-  master_printer_terpasang master_printer_terpasang[]
+  master_account           master_account             @relation(fields: [account_id], references: [id], onUpdate: NoAction)
+  master_printer          master_printer[]
   pengaduan                pengaduan[]
   surat_tugas              surat_tugas[]
 
-  @@unique([pelanggan_id, kode_lokasi], map: "uq_lokasi_pelanggan")
-  @@index([pelanggan_id], map: "idx_lokasi_pelanggan_pelanggan")
+  @@unique([account_id, kode_customer], map: "uq_customer_account_kode")
+  @@index([account_id], map: "idx_customer_account")
 }
 
-model master_pelanggan {
+model master_account {
   id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  kode_pelanggan          String                    @unique @db.VarChar(50)
-  nama_pelanggan          String                    @db.VarChar(200)
-  jenis_pelanggan         jenis_pelanggan           @default(single)
+  kode_account            String                    @unique @db.VarChar(50)
+  nama_account            String                    @db.VarChar(200)
   npwp                    String?                   @db.VarChar(50)
   telepon                 String?                   @db.VarChar(50)
   email                   String?                   @db.VarChar(150)
-  alamat                  String?
+  alamat_penagihan        String?
   aktif                   Boolean                   @default(true)
   tanggal_dibuat          DateTime                  @default(now()) @db.Timestamptz(6)
   tanggal_diperbarui      DateTime                  @default(now()) @db.Timestamptz(6)
-  master_lokasi_pelanggan master_lokasi_pelanggan[]
-  master_printer_terpasang master_printer_terpasang[]
+  master_customer         master_customer[]
+  master_printer          master_printer[]
   pengaduan               pengaduan[]
   surat_tugas             surat_tugas[]
 }
@@ -157,53 +154,67 @@ model master_pengguna {
   @@index([email], map: "idx_master_pengguna_email")
 }
 
-model master_printer {
-  id                           String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  kode_printer                 String                         @unique @db.VarChar(50)
-  merek                        String                         @db.VarChar(100)
-  model                        String                         @db.VarChar(150)
-  jenis_printer                String?                        @db.VarChar(100)
-  keterangan                   String?
-  aktif                        Boolean                        @default(true)
-  tanggal_dibuat               DateTime                       @default(now()) @db.Timestamptz(6)
-  tanggal_diperbarui           DateTime                       @default(now()) @db.Timestamptz(6)
-  detail_mutasi_stok           detail_mutasi_stok[]
-  master_printer_terpasang     master_printer_terpasang[]
-  pemakaian_barang_surat_tugas pemakaian_barang_surat_tugas[]
-  stok_printer                 stok_printer[]
+model master_printer_kategori {
+  id                 String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kode_kategori      String                 @unique @db.VarChar(50)
+  nama_kategori      String                 @db.VarChar(150)
+  aktif              Boolean                @default(true)
+  tanggal_dibuat     DateTime               @default(now()) @db.Timestamptz(6)
+  tanggal_diperbarui DateTime               @default(now()) @db.Timestamptz(6)
+  master_printer_model master_printer_model[]
 }
 
-model master_printer_terpasang {
-  id                      String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  pelanggan_id            String?                  @db.Uuid
-  lokasi_pelanggan_id     String?                  @db.Uuid
-  printer_id              String                   @db.Uuid
-  nomor_seri              String                   @unique @db.VarChar(150)
-  lokasi_detail           String?                  @db.VarChar(200)
-  tanggal_instalasi       DateTime?                @db.Date
-  meter_hitam_putih       Int                      @default(0)
-  meter_warna             Int                      @default(0)
-  status                  status_printer_terpasang @default(aktif)
-  tanggal_dibuat          DateTime                 @default(now()) @db.Timestamptz(6)
-  tanggal_diperbarui      DateTime                 @default(now()) @db.Timestamptz(6)
-  master_pelanggan        master_pelanggan?        @relation(fields: [pelanggan_id], references: [id], onUpdate: NoAction)
-  master_lokasi_pelanggan master_lokasi_pelanggan? @relation(fields: [lokasi_pelanggan_id], references: [id], onUpdate: NoAction)
-  master_printer          master_printer           @relation(fields: [printer_id], references: [id], onUpdate: NoAction)
-  pengaduan               pengaduan[]
-  surat_tugas             surat_tugas[]
+model master_printer_model {
+  id                 String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kategori_id        String                  @db.Uuid
+  kode_model         String                  @unique @db.VarChar(50)
+  merek              String                  @db.VarChar(100)
+  nama_model         String                  @db.VarChar(150)
+  aktif              Boolean                 @default(true)
+  tanggal_dibuat     DateTime                @default(now()) @db.Timestamptz(6)
+  tanggal_diperbarui DateTime                @default(now()) @db.Timestamptz(6)
+  master_printer_kategori master_printer_kategori @relation(fields: [kategori_id], references: [id], onUpdate: NoAction)
+  master_printer     master_printer[]
 
-  @@index([pelanggan_id], map: "idx_printer_terpasang_pelanggan")
-  @@index([lokasi_pelanggan_id], map: "idx_printer_terpasang_lokasi")
+  @@index([kategori_id], map: "idx_printer_model_kategori")
+}
+
+model master_printer {
+  id                           String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mp_no                        String                         @unique @db.VarChar(150)
+  serial_number                String?                        @unique @db.VarChar(150)
+  model_id                     String                         @db.Uuid
+  gudang_id                    String?                        @db.Uuid
+  account_id                   String?                        @db.Uuid
+  customer_id                  String?                        @db.Uuid
+  surat_tugas_aktif_id         String?                        @db.Uuid
+  status                       String                         @default("available") @db.VarChar(20)
+  lokasi_detail                String?                        @db.VarChar(200)
+  tanggal_instalasi            DateTime?                      @db.Date
+  meter_hitam_putih            Int                            @default(0)
+  meter_warna                  Int                            @default(0)
+  keterangan                   String?
+  tanggal_dibuat               DateTime                       @default(now()) @db.Timestamptz(6)
+  tanggal_diperbarui           DateTime                       @default(now()) @db.Timestamptz(6)
+  master_printer_model         master_printer_model           @relation(fields: [model_id], references: [id], onUpdate: NoAction)
+  master_gudang                master_gudang?                 @relation(fields: [gudang_id], references: [id], onUpdate: NoAction)
+  master_account               master_account?                @relation(fields: [account_id], references: [id], onUpdate: NoAction)
+  master_customer              master_customer?               @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
+  surat_tugas_aktif            surat_tugas?                   @relation("printer_active_wo", fields: [surat_tugas_aktif_id], references: [id], onUpdate: NoAction)
+  detail_mutasi_stok           detail_mutasi_stok[]
+  pemakaian_barang_surat_tugas pemakaian_barang_surat_tugas[]
+  pengaduan                    pengaduan[]
+  surat_tugas                  surat_tugas[]                  @relation("printer_target_wo")
+
+  @@index([model_id], map: "idx_printer_model")
+  @@index([status, gudang_id], map: "idx_printer_location")
+  @@index([customer_id, status], map: "idx_printer_customer")
 }
 
 model master_suku_cadang {
   id                           String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   kode_suku_cadang             String                         @unique @db.VarChar(50)
   nama_suku_cadang             String                         @db.VarChar(200)
-  kategori                     String?                        @db.VarChar(100)
-  merek                        String?                        @db.VarChar(100)
-  model_printer_kompatibel     String?
-  satuan                       String                         @default("pcs") @db.VarChar(30)
   aktif                        Boolean                        @default(true)
   tanggal_dibuat               DateTime                       @default(now()) @db.Timestamptz(6)
   tanggal_diperbarui           DateTime                       @default(now()) @db.Timestamptz(6)
@@ -217,6 +228,7 @@ model master_toner {
   kode_toner                   String                         @unique @db.VarChar(50)
   nama_toner                   String                         @db.VarChar(200)
   warna                        String?                        @db.VarChar(50)
+  tipe                         String?                        @db.VarChar(100)
   merek                        String?                        @db.VarChar(100)
   model_printer_kompatibel     String?
   satuan                       String                         @default("pcs") @db.VarChar(30)
@@ -275,10 +287,10 @@ model pengaduan {
   id                       String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   nomor_pengaduan          String                    @unique @db.VarChar(100)
   mp_no                    String?                   @db.VarChar(150)
-  pelanggan_id             String                    @db.Uuid
-  lokasi_pelanggan_id      String?                   @db.Uuid
+  account_id               String                    @db.Uuid
+  customer_id              String                    @db.Uuid
   sales_id                 String?                   @db.Uuid
-  printer_terpasang_id     String?                   @db.Uuid
+  printer_id              String?                   @db.Uuid
   nama_pelapor             String                    @db.VarChar(150)
   telepon_pelapor          String?                   @db.VarChar(50)
   tanggal_pengaduan        DateTime                  @default(now()) @db.Timestamptz(6)
@@ -295,26 +307,12 @@ model pengaduan {
   tanggal_dibuat           DateTime                  @default(now()) @db.Timestamptz(6)
   tanggal_diperbarui       DateTime                  @default(now()) @db.Timestamptz(6)
   master_pengguna          master_pengguna?          @relation(fields: [dibuat_oleh], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  master_lokasi_pelanggan  master_lokasi_pelanggan?  @relation(fields: [lokasi_pelanggan_id], references: [id], onUpdate: NoAction)
-  master_pelanggan         master_pelanggan          @relation(fields: [pelanggan_id], references: [id], onUpdate: NoAction)
-  master_printer_terpasang master_printer_terpasang? @relation(fields: [printer_terpasang_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  master_account           master_account            @relation(fields: [account_id], references: [id], onUpdate: NoAction)
+  master_customer          master_customer           @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
+  master_printer           master_printer?           @relation(fields: [printer_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   surat_tugas              surat_tugas[]
 
-  @@index([lokasi_pelanggan_id, status], map: "idx_pengaduan_lokasi_status")
-}
-
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
-model stok_printer {
-  id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  gudang_id          String         @db.Uuid
-  printer_id         String         @db.Uuid
-  jumlah_tersedia    Decimal        @default(0) @db.Decimal(14, 2)
-  jumlah_dicadangkan Decimal        @default(0) @db.Decimal(14, 2)
-  tanggal_diperbarui DateTime       @default(now()) @db.Timestamptz(6)
-  master_gudang      master_gudang  @relation(fields: [gudang_id], references: [id], onUpdate: NoAction)
-  master_printer     master_printer @relation(fields: [printer_id], references: [id], onUpdate: NoAction)
-
-  @@unique([gudang_id, printer_id], map: "uq_stok_printer")
+  @@index([customer_id, status], map: "idx_pengaduan_customer_status")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -350,9 +348,9 @@ model surat_tugas {
   nomor_surat_tugas                                           String                         @unique @db.VarChar(100)
   pengaduan_id                                                String?                        @db.Uuid
   mp_no                                                       String?                        @db.VarChar(150)
-  pelanggan_id                                                String                         @db.Uuid
-  lokasi_pelanggan_id                                         String?                        @db.Uuid
-  printer_terpasang_id                                        String?                        @db.Uuid
+  account_id                                                  String                         @db.Uuid
+  customer_id                                                 String                         @db.Uuid
+  printer_id                                                 String?                        @db.Uuid
   tanggal_jadwal                                              DateTime?                      @db.Timestamptz(6)
   mulai_kunjungan                                             DateTime?                      @db.Timestamptz(6)
   selesai_kunjungan                                           DateTime?                      @db.Timestamptz(6)
@@ -375,13 +373,15 @@ model surat_tugas {
   master_pengguna_surat_tugas_disetujui_olehTomaster_pengguna master_pengguna?               @relation("surat_tugas_disetujui_olehTomaster_pengguna", fields: [disetujui_oleh], references: [id], onDelete: Restrict, onUpdate: NoAction)
   master_pengguna_surat_tugas_validasi_warehouse_olehTomaster_pengguna master_pengguna?       @relation("surat_tugas_validasi_warehouse_olehTomaster_pengguna", fields: [validasi_warehouse_oleh], references: [id], onDelete: Restrict, onUpdate: NoAction)
   master_pengguna_surat_tugas_validasi_kepala_olehTomaster_pengguna    master_pengguna?       @relation("surat_tugas_validasi_kepala_olehTomaster_pengguna", fields: [validasi_kepala_teknisi_oleh], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  master_lokasi_pelanggan                                     master_lokasi_pelanggan?       @relation(fields: [lokasi_pelanggan_id], references: [id], onUpdate: NoAction)
-  master_pelanggan                                            master_pelanggan               @relation(fields: [pelanggan_id], references: [id], onUpdate: NoAction)
+  master_account                                              master_account                 @relation(fields: [account_id], references: [id], onUpdate: NoAction)
+  master_customer                                             master_customer                @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
   pengaduan                                                   pengaduan?                     @relation(fields: [pengaduan_id], references: [id], onUpdate: NoAction)
-  master_printer_terpasang                                    master_printer_terpasang?      @relation(fields: [printer_terpasang_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  master_printer                                              master_printer?                @relation("printer_target_wo", fields: [printer_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reserved_printers                                           master_printer[]               @relation("printer_active_wo")
   teknisi_surat_tugas                                         teknisi_surat_tugas[]
 
   @@index([pengaduan_id, status], map: "idx_surat_tugas_pengaduan_status")
+  @@index([customer_id, status], map: "idx_surat_tugas_customer_status")
 }
 
 model teknisi_surat_tugas {
@@ -399,7 +399,7 @@ model teknisi_surat_tugas {
 model riwayat_audit {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   jenis_dokumen   String           @db.VarChar(50)
-  nomor_dokumen   String           @db.VarChar(100)
+  nomor_dokumen   String           @db.VarChar(150)
   tabel_sumber    String           @db.VarChar(100)
   id_sumber       String           @db.Uuid
   aksi            String           @db.VarChar(50)
@@ -418,6 +418,8 @@ model riwayat_audit {
   @@index([jenis_dokumen, nomor_dokumen], map: "idx_riwayat_audit_dokumen")
   @@index([tabel_sumber, id_sumber], map: "idx_riwayat_audit_sumber")
   @@index([tanggal_audit], map: "idx_riwayat_audit_tanggal")
+  @@index([jenis_dokumen, id_sumber, tanggal_audit], map: "idx_riwayat_audit_barang_item")
+  @@index([jenis_dokumen, tanggal_audit], map: "idx_riwayat_audit_barang_tanggal")
 }
 
 enum jenis_barang {
@@ -438,11 +440,6 @@ enum jenis_mutasi_stok {
   transfer
   penyesuaian
   pemakaian
-}
-
-enum jenis_pelanggan {
-  single
-  multisite
 }
 
 enum peran_pengguna {

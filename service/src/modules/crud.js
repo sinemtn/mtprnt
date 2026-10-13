@@ -4,6 +4,7 @@ const prisma = require("../config/prisma");
 const asyncHandler = require("../utils/async-handler");
 const { sukses, gagal } = require("../utils/response");
 const { autentikasi, izin, otorisasi } = require("../middlewares/auth");
+const { catatAuditBarang } = require("./audit-barang.service");
 
 const querySchema = z.object({
   halaman: z.coerce.number().int().min(1).default(1),
@@ -15,7 +16,8 @@ async function relasiTerpakai(relationChecks = [], id) {
   for (const check of relationChecks) {
     const total = await prisma[check.model].count({
       where: {
-        [check.field]: id
+        [check.field]: id,
+        ...check.where
       }
     });
     if (total > 0) return check.label || check.model;
@@ -38,6 +40,7 @@ function buatCrudRouter(options) {
   const model = prisma[options.model];
   const skemaBuat = options.skemaBuat || z.object({}).passthrough();
   const skemaUbah = options.skemaUbah || skemaBuat.partial();
+  const listQuerySchema = options.listQuerySchema ? querySchema.extend(options.listQuerySchema) : querySchema;
   const kolomCari = options.kolomCari || [];
   const softDelete = options.softDelete !== false;
   const roleTulis = options.roleTulis || ["admin"];
@@ -48,8 +51,8 @@ function buatCrudRouter(options) {
   router.use(autentikasi);
 
   router.get("/", middlewareLihat, asyncHandler(async (req, res) => {
-    const query = querySchema.parse(req.query);
-    const where = {};
+    const query = listQuerySchema.parse(req.query);
+    const where = options.listWhere?.(query) || {};
 
     if (query.cari && kolomCari.length) {
       where.OR = kolomCari.map((kolom) => ({
@@ -61,6 +64,7 @@ function buatCrudRouter(options) {
       model.count({ where }),
       model.findMany({
         where,
+        include: options.listInclude,
         skip: (query.halaman - 1) * query.batas,
         take: query.batas,
         orderBy: options.orderBy || { tanggal_dibuat: "desc" }
@@ -87,7 +91,13 @@ function buatCrudRouter(options) {
   router.post("/", izin(modulKey, "create", ...roleTulis), asyncHandler(async (req, res) => {
     const data = skemaBuat.parse(req.body);
     if (options.beforeCreate) await options.beforeCreate(data, req);
-    const item = await model.create({ data });
+    const item = options.auditBarangJenis
+      ? await prisma.$transaction(async (tx) => {
+        const created = options.createItem ? await options.createItem(data, req, tx) : await tx[options.model].create({ data });
+        await catatAuditBarang(tx, req, { jenis_barang: options.auditBarangJenis, aksi: "buat", sesudah: created, keterangan: "Data master dibuat." });
+        return created;
+      })
+      : options.createItem ? await options.createItem(data, req) : await model.create({ data });
     return sukses(res, "Data berhasil dibuat.", item, 201);
   }));
 
@@ -98,10 +108,16 @@ function buatCrudRouter(options) {
       if (!existing) return gagal(res, "Data tidak ditemukan.", 404);
       await options.beforeUpdate(data, req, existing);
     }
-    const item = await model.update({
-      where: { id: req.params.id },
-      data
-    });
+    const item = options.auditBarangJenis
+      ? await prisma.$transaction(async (tx) => {
+        const sebelum = await tx[options.model].findUnique({ where: { id: req.params.id } });
+        if (!sebelum) return null;
+        const sesudah = await tx[options.model].update({ where: { id: req.params.id }, data });
+        await catatAuditBarang(tx, req, { jenis_barang: options.auditBarangJenis, aksi: "ubah", sebelum, sesudah, keterangan: "Data master diperbarui." });
+        return sesudah;
+      })
+      : await model.update({ where: { id: req.params.id }, data });
+    if (!item) return gagal(res, "Data tidak ditemukan.", 404);
     return sukses(res, "Data berhasil diperbarui.", item);
   }));
 
@@ -118,7 +134,14 @@ function buatCrudRouter(options) {
       return gagal(res, `Data tidak bisa dihapus permanen karena sudah dipakai di ${relasi}.`, 409);
     }
 
-    await model.delete({ where: { id: req.params.id } });
+    if (options.auditBarangJenis) {
+      await prisma.$transaction(async (tx) => {
+        if (options.deleteItem) await options.deleteItem(item, req, tx);
+        else await tx[options.model].delete({ where: { id: req.params.id } });
+        await catatAuditBarang(tx, req, { jenis_barang: options.auditBarangJenis, aksi: "hapus_permanen", sebelum: item, keterangan: "Data master dihapus permanen." });
+      });
+    } else if (options.deleteItem) await options.deleteItem(item, req);
+    else await model.delete({ where: { id: req.params.id } });
     return sukses(res, "Data berhasil dihapus permanen.");
   }));
 
@@ -128,10 +151,16 @@ function buatCrudRouter(options) {
       return sukses(res, "Data berhasil dihapus.");
     }
 
-    const item = await model.update({
-      where: { id: req.params.id },
-      data: { aktif: false }
-    });
+    const item = options.auditBarangJenis
+      ? await prisma.$transaction(async (tx) => {
+        const sebelum = await tx[options.model].findUnique({ where: { id: req.params.id } });
+        if (!sebelum) return null;
+        const sesudah = await tx[options.model].update({ where: { id: req.params.id }, data: { aktif: false } });
+        await catatAuditBarang(tx, req, { jenis_barang: options.auditBarangJenis, aksi: "nonaktifkan", sebelum, sesudah, keterangan: "Data master dinonaktifkan." });
+        return sesudah;
+      })
+      : await model.update({ where: { id: req.params.id }, data: { aktif: false } });
+    if (!item) return gagal(res, "Data tidak ditemukan.", 404);
     return sukses(res, "Data berhasil dinonaktifkan.", item);
   }));
 

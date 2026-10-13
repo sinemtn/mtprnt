@@ -7,11 +7,15 @@ const { notFound, errorHandler } = require("./middlewares/error-handler");
 const authRoutes = require("./modules/auth.routes");
 const penggunaRoutes = require("./modules/pengguna.routes");
 const masterRoutes = require("./modules/master.routes");
+const printerRoutes = require("./modules/printer.routes");
+const accountRoutes = require("./modules/account.routes");
 const stokRoutes = require("./modules/stok.routes");
 const mutasiStokRoutes = require("./modules/mutasi-stok.routes");
 const pengaduanRoutes = require("./modules/pengaduan.routes");
 const suratTugasRoutes = require("./modules/surat-tugas.routes");
 const auditRoutes = require("./modules/audit.routes");
+const auditBarangRoutes = require("./modules/audit-barang.routes");
+const masterImportRoutes = require("./modules/master-import.routes");
 const pengaturanRoutes = require("./modules/pengaturan.routes");
 
 const app = express();
@@ -30,19 +34,22 @@ app.get("/api/kesehatan", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/pengguna", penggunaRoutes);
-app.use("/api/pelanggan", masterRoutes.pelanggan);
-app.use("/api/lokasi-pelanggan", masterRoutes.lokasiPelanggan);
+app.use("/api/account", accountRoutes);
 app.use("/api/kontrak", masterRoutes.kontrak);
 app.use("/api/toner", masterRoutes.toner);
-app.use("/api/printer", masterRoutes.printer);
+app.use("/api/printer-kategori", printerRoutes.kategori);
+app.use("/api/printer-model", printerRoutes.model);
+app.use("/api/printer", printerRoutes.unit);
 app.use("/api/suku-cadang", masterRoutes.sukuCadang);
-app.use("/api/printer-terpasang", masterRoutes.printerTerpasang);
+app.use("/api/printer-terpasang", printerRoutes.installed);
 app.use("/api/gudang", masterRoutes.gudang);
 app.use("/api/stok", stokRoutes);
 app.use("/api/mutasi-stok", mutasiStokRoutes);
 app.use("/api/pengaduan", pengaduanRoutes);
 app.use("/api/surat-tugas", suratTugasRoutes);
 app.use("/api/audit", auditRoutes);
+app.use("/api/audit-barang", auditBarangRoutes);
+app.use("/api/master-import", masterImportRoutes);
 app.use("/api/pengaturan", pengaturanRoutes);
 
 app.use(notFound);

@@ -1,9 +1,11 @@
 <script setup>
-import { Plus, Search } from "lucide-vue-next";
+import { History, Minus, Plus, Search } from "lucide-vue-next";
 
 defineProps({
   activeStockView: { type: Object, required: true },
   activeStockGroup: { type: String, required: true },
+  canManageStock: { type: Boolean, default: false },
+  canViewAuditBarang: { type: Boolean, default: false },
   stokSearch: { type: String, required: true },
   filteredStok: { type: Object, required: true },
   paginatedStok: { type: Object, required: true },
@@ -13,7 +15,7 @@ defineProps({
   paginationSelesai: { type: Function, required: true }
 });
 
-defineEmits(["update:stokSearch", "reset-stock-pagination", "open-stock-mutation", "previous-page", "next-page"]);
+defineEmits(["update:stokSearch", "reset-stock-pagination", "open-stock-mutation", "open-history", "previous-page", "next-page"]);
 </script>
 
 <template>
@@ -27,10 +29,16 @@ defineEmits(["update:stokSearch", "reset-stock-pagination", "open-stock-mutation
         @input="$emit('update:stokSearch', $event.target.value); $emit('reset-stock-pagination')"
       />
     </label>
-    <button class="primary-button" type="button" @click="$emit('open-stock-mutation')">
-      <Plus :size="17" />
-      <span>Tambah</span>
-    </button>
+    <template v-if="canManageStock">
+      <button class="secondary-button" type="button" @click="$emit('open-stock-mutation', 'keluar')">
+        <Minus :size="16" />
+        <span>Kurangi Stok</span>
+      </button>
+      <button class="primary-button" type="button" @click="$emit('open-stock-mutation', 'masuk')">
+        <Plus :size="16" />
+        <span>Tambah Stok</span>
+      </button>
+    </template>
   </section>
 
   <section class="stock-grid">
@@ -47,17 +55,25 @@ defineEmits(["update:stokSearch", "reset-stock-pagination", "open-stock-mutation
               <th>Barang</th>
               <th>Tersedia</th>
               <th>Cadangan</th>
+              <th v-if="canManageStock || canViewAuditBarang">Aksi</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="row in paginatedStok[activeStockGroup]" :key="row.id">
-              <td>{{ row.master_gudang?.nama_gudang || "-" }}</td>
+              <td>{{ row.belum_ditempatkan ? "Belum ada gudang" : row.master_gudang?.nama_gudang || "-" }}</td>
               <td>{{ row.master_toner?.nama_toner || row.master_printer?.model || row.master_suku_cadang?.nama_suku_cadang || "-" }}</td>
               <td>{{ row.jumlah_tersedia }}</td>
               <td>{{ row.jumlah_dicadangkan }}</td>
+              <td v-if="canManageStock || canViewAuditBarang">
+                <div class="row-actions">
+                  <button v-if="canViewAuditBarang" class="icon-action" type="button" title="Riwayat barang" aria-label="Riwayat barang" @click="$emit('open-history', row)"><History :size="16" /></button>
+                  <button v-if="canManageStock" class="icon-action" type="button" title="Tambah stok" aria-label="Tambah stok" @click="$emit('open-stock-mutation', 'masuk', row)"><Plus :size="16" /></button>
+                  <button v-if="canManageStock" class="icon-action" type="button" title="Kurangi stok" aria-label="Kurangi stok" :disabled="Number(row.jumlah_tersedia) <= 0" @click="$emit('open-stock-mutation', 'keluar', row)"><Minus :size="16" /></button>
+                </div>
+              </td>
             </tr>
             <tr v-if="!filteredStok[activeStockGroup]?.length">
-              <td colspan="4" class="empty-cell">Belum ada stok.</td>
+              <td :colspan="canManageStock || canViewAuditBarang ? 5 : 4" class="empty-cell">Belum ada stok.</td>
             </tr>
           </tbody>
         </table>

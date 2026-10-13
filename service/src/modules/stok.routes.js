@@ -1,46 +1,48 @@
 const express = require("express");
-const { z } = require("zod");
 const prisma = require("../config/prisma");
 const asyncHandler = require("../utils/async-handler");
 const { sukses, gagal } = require("../utils/response");
 const { buatNomor } = require("../utils/nomor");
 const { autentikasi, izin } = require("../middlewares/auth");
 const { terapkanMutasi } = require("./stok.service");
+const { mutasiSchema } = require("./stok.schema");
 
 const router = express.Router();
 
-const lineSchema = z.object({
-  jenis_barang: z.enum(["toner", "printer", "suku_cadang"]),
-  toner_id: z.string().uuid().optional().nullable(),
-  printer_id: z.string().uuid().optional().nullable(),
-  suku_cadang_id: z.string().uuid().optional().nullable(),
-  jumlah: z.number().positive(),
-  satuan: z.string().optional(),
-  keterangan: z.string().optional().nullable()
-});
+function sertakanMasterTanpaStok(stokRows, masterRows, itemKey, masterKey) {
+  const itemDenganStok = new Set(stokRows.map((row) => row[itemKey]));
+  const tanpaStok = masterRows
+    .filter((master) => !itemDenganStok.has(master.id))
+    .map((master) => ({
+      id: `master-${masterKey}-${master.id}`,
+      gudang_id: null,
+      [itemKey]: master.id,
+      [masterKey]: master,
+      master_gudang: null,
+      jumlah_tersedia: "0.00",
+      jumlah_dicadangkan: "0.00",
+      belum_ditempatkan: true
+    }));
 
-const mutasiSchema = z.object({
-  nomor_mutasi: z.string().optional(),
-  jenis_mutasi: z.enum(["masuk", "keluar", "transfer", "penyesuaian", "pemakaian"]),
-  gudang_asal_id: z.string().uuid().optional().nullable(),
-  gudang_tujuan_id: z.string().uuid().optional().nullable(),
-  jenis_referensi: z.string().optional().nullable(),
-  referensi_id: z.string().uuid().optional().nullable(),
-  keterangan: z.string().optional().nullable(),
-  detail: z.array(lineSchema).min(1),
-  langsung_posting: z.boolean().optional()
-});
+  return [...stokRows, ...tanpaStok];
+}
 
 router.use(autentikasi);
 
 router.get("/", izin("stock_data", "view", "warehouse", "kepala-teknisi", "teknisi"), asyncHandler(async (req, res) => {
-  const [toner, printer, suku_cadang] = await Promise.all([
+  const [stokToner, stokSparepart, masterToner, masterSparepart, printerAvailable] = await Promise.all([
     prisma.stok_toner.findMany({ include: { master_gudang: true, master_toner: true } }),
-    prisma.stok_printer.findMany({ include: { master_gudang: true, master_printer: true } }),
-    prisma.stok_suku_cadang.findMany({ include: { master_gudang: true, master_suku_cadang: true } })
+    prisma.stok_suku_cadang.findMany({ include: { master_gudang: true, master_suku_cadang: true } }),
+    prisma.master_toner.findMany({ where: { aktif: true } }),
+    prisma.master_suku_cadang.findMany({ where: { aktif: true } }),
+    prisma.master_printer.count({ where: { status: "available" } })
   ]);
 
-  return sukses(res, "Stok berhasil diambil.", { toner, printer, suku_cadang });
+  return sukses(res, "Stok berhasil diambil.", {
+    toner: sertakanMasterTanpaStok(stokToner, masterToner, "toner_id", "master_toner"),
+    printer: [{ jumlah_tersedia: printerAvailable, jumlah_dicadangkan: 0 }],
+    suku_cadang: sertakanMasterTanpaStok(stokSparepart, masterSparepart, "suku_cadang_id", "master_suku_cadang")
+  });
 }));
 
 router.get("/mutasi", izin("stock_data", "view", "warehouse", "kepala-teknisi"), asyncHandler(async (req, res) => {
@@ -77,7 +79,7 @@ router.post("/mutasi", izin("stock_data", "create", "warehouse"), asyncHandler(a
     });
 
     if (body.langsung_posting) {
-      await terapkanMutasi(tx, mutasi, body.detail);
+      await terapkanMutasi(tx, mutasi, body.detail, req);
     }
 
     return mutasi;
@@ -95,12 +97,16 @@ router.post("/mutasi/:id/posting", izin("stock_data", "workflow", "warehouse"), 
     }
 
     const detail = await tx.detail_mutasi_stok.findMany({ where: { mutasi_stok_id: mutasi.id } });
-    await terapkanMutasi(tx, mutasi, detail);
-
-    return tx.mutasi_stok.update({
-      where: { id: mutasi.id },
+    const claimed = await tx.mutasi_stok.updateMany({
+      where: { id: mutasi.id, status: "draft" },
       data: { status: "terposting", tanggal_terposting: new Date() }
     });
+    if (claimed.count !== 1) {
+      throw Object.assign(new Error("Mutasi stok sudah diproses."), { statusCode: 409 });
+    }
+    await terapkanMutasi(tx, mutasi, detail, req);
+
+    return tx.mutasi_stok.findUnique({ where: { id: mutasi.id } });
   });
 
   if (!hasil) return gagal(res, "Mutasi stok tidak ditemukan.", 404);
