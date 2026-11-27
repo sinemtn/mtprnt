@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import { ambilToken } from "../services/api";
 import LoginView from "../views/LoginView.vue";
 import DashboardView from "../views/DashboardView.vue";
+import { viewPaths } from "./viewPaths";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -15,24 +16,12 @@ const router = createRouter({
       name: "login",
       component: LoginView
     },
-    {
-      path: "/dashboard",
-      name: "dashboard",
+    ...Object.entries(viewPaths).map(([view, path]) => ({
+      path,
+      name: view,
       component: DashboardView,
-      meta: { wajibMasuk: true }
-    },
-    {
-      path: "/tiket",
-      name: "tiket",
-      component: DashboardView,
-      meta: { wajibMasuk: true }
-    },
-    {
-      path: "/surat-tugas",
-      name: "surat-tugas",
-      component: DashboardView,
-      meta: { wajibMasuk: true }
-    }
+      meta: { wajibMasuk: true, view }
+    }))
   ]
 });
 

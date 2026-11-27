@@ -35,7 +35,7 @@ function normalizeCell(value, column, baris, errors) {
   }
   if (empty(value)) {
     if (column.required) errors.push(issue(baris, column.key, "Wajib diisi."));
-    return column.type === "boolean" ? true : null;
+    return column.default !== undefined ? column.default : column.type === "boolean" ? true : null;
   }
   const text = String(value).trim();
   if (column.type === "date") {
@@ -107,7 +107,16 @@ async function validateRows(tx, kind, rows, initialErrors = []) {
       if (seen.has(key)) errors.push(issue(row.number, column, `Duplikat dengan baris ${seen.get(key)}.`));
       else seen.set(key, row.number);
     }
-    if (kind === "account" && row.data.aktif === false) errors.push(issue(row.number, "aktif", "Account dan Customer pertama harus aktif."));
+    if (kind === "account") {
+      const customerFields = ["kode_customer", "nama_customer", "alamat_customer"];
+      const hasCustomer = customerFields.some((field) => row.data[field]);
+      if (hasCustomer) {
+        for (const field of customerFields) {
+          if (!row.data[field]) errors.push(issue(row.number, field, "Wajib diisi bila Customer pertama dibuat."));
+        }
+        if (row.data.aktif === false) errors.push(issue(row.number, "aktif", "Billing dan Customer pertama harus aktif."));
+      }
+    }
     if (kind === "pengguna" && row.data.role && !ROLE_VALUES.includes(normalisasiRole(row.data.role))) {
       errors.push(issue(row.number, "role", "Role tidak dikenal."));
     }
@@ -123,13 +132,13 @@ async function validateRows(tx, kind, rows, initialErrors = []) {
   const refs = {};
   if (["lokasiCustomer"].includes(kind)) {
     refs.accounts = mapBy(await tx.master_account.findMany({ where: { kode_account: { in: uniqueValues(rows, "kode_account") } } }), "kode_account");
-    const accountIds = [...refs.accounts.values()].map((account) => account.id);
-    const existing = await tx.master_customer.findMany({ where: { account_id: { in: accountIds }, kode_customer: { in: codes } }, select: { account_id: true, kode_customer: true } });
+    const accountCodes = [...refs.accounts.values()].map((account) => account.kode_account);
+    const existing = await tx.master_customer.findMany({ where: { account_id: { in: accountCodes }, kode_customer: { in: codes } }, select: { account_id: true, kode_customer: true } });
     const used = new Set(existing.map((item) => `${item.account_id}|${item.kode_customer}`));
     for (const row of rows) {
       const account = refs.accounts.get(row.data.kode_account);
       if (!account?.aktif) errors.push(issue(row.number, "kode_account", "Account tidak ditemukan atau tidak aktif."));
-      else if (used.has(`${account.id}|${row.data.kode_customer}`)) errors.push(issue(row.number, "kode_customer", "Kode Customer sudah ada pada Account ini."));
+      else if (used.has(`${account.kode_account}|${row.data.kode_customer}`)) errors.push(issue(row.number, "kode_customer", "Kode Customer sudah ada pada Account ini."));
     }
   }
   if (kind === "printerModel") {
@@ -152,12 +161,6 @@ async function validateRows(tx, kind, rows, initialErrors = []) {
       if (row.data.serial_number && usedSerials.has(row.data.serial_number)) errors.push(issue(row.number, "serial_number", "Serial Number sudah ada."));
     }
   }
-  if (kind === "gudang") {
-    refs.technicians = mapBy(await tx.master_pengguna.findMany({ where: { user_id: { in: uniqueValues(rows, "user_id_teknisi") } } }), "user_id");
-    for (const row of rows) if (row.data.user_id_teknisi && (!refs.technicians.get(row.data.user_id_teknisi)?.aktif || refs.technicians.get(row.data.user_id_teknisi)?.peran !== "teknisi")) {
-      errors.push(issue(row.number, "user_id_teknisi", "User teknisi tidak ditemukan atau tidak aktif."));
-    }
-  }
   if (kind === "pengguna") {
     const existing = await tx.master_pengguna.findMany({ where: { email: { in: uniqueValues(rows, "email") } }, select: { email: true } });
     const used = new Set(existing.map((item) => item.email));
@@ -169,15 +172,26 @@ async function validateRows(tx, kind, rows, initialErrors = []) {
 async function createRow(tx, req, kind, data, refs, passwordHash) {
   if (kind === "account") {
     const { kode_customer, nama_customer, alamat_customer, nama_pic, telepon_pic, email_pic, ...account } = data;
-    return tx.master_account.create({ data: { ...account, master_customer: { create: { kode_customer, nama_customer, alamat: alamat_customer, nama_pic, telepon_pic, email_pic, aktif: true } } } });
+    return tx.master_account.create({ data: {
+      ...account,
+      ...(kode_customer ? { master_customer: { create: {
+        kode_customer, nama_customer, alamat: alamat_customer, nama_pic, telepon_pic, email_pic, aktif: true,
+        ...(nama_pic ? { master_customer_pic: { create: { nama_pic, telepon_pic, email_pic } } } : {})
+      } } } : {})
+    } });
   }
   if (kind === "lokasiCustomer") {
     const { kode_account, ...customer } = data;
-    return tx.master_customer.create({ data: { ...customer, account_id: refs.accounts.get(kode_account).id } });
+    const { nama_pic, telepon_pic, email_pic, ...details } = customer;
+    return tx.master_customer.create({ data: {
+      ...details, nama_pic, telepon_pic, email_pic,
+      account_id: refs.accounts.get(kode_account).kode_account,
+      ...(nama_pic ? { master_customer_pic: { create: { nama_pic, telepon_pic, email_pic } } } : {})
+    } });
   }
   if (kind === "printerModel") {
     const { kode_kategori, ...model } = data;
-    return tx.master_printer_model.create({ data: { ...model, kategori_id: refs.categories.get(kode_kategori).id } });
+    return tx.master_printer_model.create({ data: { ...model, kategori_id: refs.categories.get(kode_kategori).kode_kategori } });
   }
   if (kind === "printer") {
     const { kode_model, kode_gudang, tanggal_pembelian, tanggal_maintenance_berikutnya, ...unit } = data;
@@ -185,15 +199,12 @@ async function createRow(tx, req, kind, data, refs, passwordHash) {
       ...unit,
       tanggal_pembelian: tanggal_pembelian ? new Date(`${tanggal_pembelian}T00:00:00.000Z`) : null,
       tanggal_maintenance_berikutnya: tanggal_maintenance_berikutnya ? new Date(`${tanggal_maintenance_berikutnya}T00:00:00.000Z`) : null,
-      model_id: refs.models.get(kode_model).id, gudang_id: refs.warehouses.get(kode_gudang).id, status: "available"
+      model_id: refs.models.get(kode_model).kode_model, gudang_id: refs.warehouses.get(kode_gudang).kode_gudang, status: "available"
     } });
     await catatAuditBarang(tx, req, { jenis_barang: "printer", aksi: "buat", sesudah: created, keterangan: "Unit printer dibuat melalui impor Excel." });
     return created;
   }
-  if (kind === "gudang") {
-    const { user_id_teknisi, ...warehouse } = data;
-    return tx.master_gudang.create({ data: { ...warehouse, teknisi_id: user_id_teknisi ? refs.technicians.get(user_id_teknisi).id : null } });
-  }
+  if (kind === "gudang") return tx.master_gudang.create({ data: { ...data, teknisi_id: null } });
   if (kind === "pengguna") {
     const { name, role, password, active, ...user } = data;
     return tx.master_pengguna.create({ data: { ...user, nama: name, peran: normalisasiRole(role), aktif: active, kata_sandi_hash: passwordHash } });
@@ -206,7 +217,10 @@ async function createRow(tx, req, kind, data, refs, passwordHash) {
 }
 
 router.use(autentikasi);
-router.param("kind", (req, res, next, kind) => formats[kind] ? next() : gagal(res, "Master data tidak dikenal.", 404));
+router.param("kind", (req, res, next, kind) => {
+  if (kind === "printer") return gagal(res, "Unit printer baru harus dibuat melalui Surat Tugas Penerimaan Printer.", 409);
+  return formats[kind] ? next() : gagal(res, "Master data tidak dikenal.", 404);
+});
 router.use("/:kind", (req, res, next) => izin("master_data", "create", req.params.kind === "gudang" ? "warehouse" : "admin")(req, res, next));
 
 router.get("/:kind/format", (req, res) => sukses(res, "Format impor berhasil diambil.", formats[req.params.kind]));

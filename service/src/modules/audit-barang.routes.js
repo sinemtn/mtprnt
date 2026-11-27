@@ -29,6 +29,7 @@ const eventNames = {
   retur_gudang: "Unit Kembali ke Gudang", keluar_gudang: "Unit Keluar Gudang",
   pasang_customer: "Unit Dipasang di Customer", masuk: "Stok Masuk",
   maintenance_mulai: "Maintenance Dimulai", maintenance_selesai: "Maintenance Selesai", maintenance_dibatalkan: "Maintenance Dibatalkan",
+  maintenance_hasil: "Hasil Maintenance", service_hasil: "Hasil Service", repair_mulai: "Repair Dimulai", repair_dibatalkan: "Repair Dibatalkan",
   keluar: "Stok Keluar", transfer: "Transfer Stok", penyesuaian: "Penyesuaian Stok",
   pemakaian: "Pemakaian Surat Tugas"
 };

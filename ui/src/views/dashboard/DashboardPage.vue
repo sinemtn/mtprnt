@@ -11,7 +11,8 @@ defineProps({
   axisOptions: { type: Object, required: true },
   donutOptions: { type: Object, required: true },
   statusKomplain: { type: Array, required: true },
-  stokBarang: { type: Array, required: true }
+  stokBarang: { type: Array, required: true },
+  backupReminders: { type: Array, default: () => [] }
 });
 
 function chartTotal(data) {
@@ -27,6 +28,11 @@ function chartTotal(data) {
       <strong>{{ card.value }}</strong>
       <small>{{ card.note }}</small>
     </article>
+  </section>
+
+  <section v-if="backupReminders.length" class="backup-reminders">
+    <h2>BACK-UP: unit lama belum diterima</h2>
+    <div class="table-wrap"><table><thead><tr><th>Surat Tugas</th><th>MP No unit lama</th><th>Customer</th><th>Terlambat</th></tr></thead><tbody><tr v-for="item in backupReminders" :key="item.nomor_surat_tugas"><td>{{ item.nomor_surat_tugas }}</td><td>{{ item.mp_no }}</td><td>{{ item.customer || '-' }}</td><td>{{ item.hari_terlambat }} hari</td></tr></tbody></table></div>
   </section>
 
   <section class="dashboard-chart-grid">
@@ -112,3 +118,9 @@ function chartTotal(data) {
     </article>
   </section>
 </template>
+
+<style scoped>
+.backup-reminders { margin: 20px 0; }
+.backup-reminders h2 { font-size: 16px; margin: 0 0 10px; }
+.backup-reminders table { width: 100%; }
+</style>

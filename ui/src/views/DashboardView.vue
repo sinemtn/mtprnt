@@ -34,7 +34,6 @@ import {
   Printer,
   Save,
   Settings,
-  TimerReset,
   Trash2,
   UserRound,
   Wrench,
@@ -42,6 +41,7 @@ import {
 } from "lucide-vue-next";
 import logoMulti from "../assets/img/logo-multi-transparent.png";
 import api, { hapusToken } from "../services/api";
+import { viewPaths } from "../router/viewPaths";
 import AuditPage from "./audit/AuditPage.vue";
 import AuditBarangPage from "./audit/AuditBarangPage.vue";
 import Complaint from "./complaint/Complaint.vue";
@@ -50,9 +50,9 @@ import StockSparepart from "./dataset/StockSparepart.vue";
 import StockToner from "./dataset/StockToner.vue";
 import Dashboard from "./dashboard/Dashboard.vue";
 import Gudang from "./master-data/Gudang.vue";
-import LokasiCustomer from "./master-data/LokasiCustomer.vue";
 import MasterImportDialog from "./master-data/MasterImportDialog.vue";
 import Account from "./master-data/Account.vue";
+import Customer from "./master-data/Customer.vue";
 import PrinterMaster from "./master-data/Printer.vue";
 import PrinterKategori from "./master-data/PrinterKategori.vue";
 import PrinterModel from "./master-data/PrinterModel.vue";
@@ -75,25 +75,39 @@ const pesanSukses = ref("");
 let toastTimer = null;
 const sidebarTerbuka = ref(false);
 const userMenuTerbuka = ref(false);
-const activeView = ref(route.path === "/tiket" ? "tiket" : route.path === "/surat-tugas" ? "suratTugasBaru" : "dashboard");
+const activeView = ref(route.meta.view || "dashboard");
 const ticketPrefill = ref(null);
 const loading = ref(false);
 const modalTerbuka = ref(false);
 const modalStokTerbuka = ref(false);
 const importKind = ref(null);
-const locationRefreshKey = ref(0);
+const customerRefreshKey = ref(0);
 const konfirmasiHapusTerbuka = ref(false);
 const targetHapus = ref(null);
 const targetHapusJenis = ref("account");
 const modeKonfirmasi = ref("deactivate");
 const modeForm = ref("create");
 const formTab = ref("general");
+const compatRows = ref([]);
+const compatOptions = ref([]);
+const compatSearch = ref("");
+const compatLinkedSearch = ref("");
+const compatLinkedPage = ref(1);
+const compatLinkedTotal = ref(0);
+const compatCandidatePage = ref(1);
+const compatCandidateTotal = ref(0);
+const compatSearching = ref(false);
+const compatError = ref("");
+const compatBusy = ref(false);
+let compatSearchTimer;
+let compatLinkedTimer;
+let compatRequestId = 0;
+let compatLinkedRequestId = 0;
 const form = reactive({});
 const siteRows = ref([]);
 const siteFormVisible = ref(false);
 const siteMode = ref("create");
 const siteForm = reactive({});
-const firstCustomerForm = reactive({});
 const itemForm = reactive({
   gudang_id: "",
   jenis_barang: "toner",
@@ -138,6 +152,7 @@ const stokPagination = reactive({
 });
 const stokSearch = ref("");
 const printerSummary = reactive({ available: 0, reserved: 0, issued: 0, installed: 0 });
+const backupReminders = ref([]);
 const serverTotal = ref(0);
 const printerFilters = reactive({ kategori_id: "", model_id: "" });
 const availablePrinterOptions = ref([]);
@@ -196,28 +211,27 @@ const menu = ref([
         icon: Database,
         terbuka: false,
         children: [
-          { key: "account", nama: "Account", icon: Building2 },
+          {
+            nama: "Account",
+            icon: Building2,
+            terbuka: false,
+            children: [
+              { key: "account", nama: "Billing", icon: Building2 },
+              { key: "customer", nama: "Customer", icon: UserRound }
+            ]
+          },
           {
             nama: "Printer",
             icon: Printer,
             terbuka: false,
             children: [
-              { key: "printer", nama: "Unit Printer", icon: Printer },
               { key: "printerKategori", nama: "Kategori Printer", icon: Printer },
               { key: "printerModel", nama: "Model Printer", icon: Printer }
             ]
           },
           { key: "toner", nama: "Toner", icon: Boxes },
           { key: "sukuCadang", nama: "Sparepart", icon: Wrench },
-          {
-            nama: "Lokasi",
-            icon: Box,
-            terbuka: false,
-            children: [
-              { key: "gudang", nama: "Master Gudang", icon: Box },
-              { key: "lokasiCustomer", nama: "Lokasi Customer", icon: Building2 }
-            ]
-          },
+          { key: "gudang", nama: "Master Gudang", icon: Box },
           { key: "pengguna", nama: "User", icon: UserRound }
         ]
       }
@@ -234,8 +248,7 @@ const menu = ref([
         terbuka: false,
         adminOnly: true,
         children: [
-          { key: "rolePermission", nama: "Role Permission", icon: KeyRound },
-          { key: "slaPending", nama: "SLA Pending Komplain", icon: TimerReset }
+          { key: "rolePermission", nama: "Role Permission", icon: KeyRound }
         ]
       }
     ]
@@ -250,23 +263,31 @@ const menu = ref([
 
 const configs = {
   account: {
-    title: "Account",
-    subtitle: "Kelola Account dan Customer operasional.",
+    title: "Billing",
+    subtitle: "Identitas dan alamat penagihan Account.",
     endpoint: "/account",
     hardDelete: true,
     search: true,
+    searchPlaceholder: "Cari kode, nama, NPWP, atau PIC Billing",
     serverPagination: true,
     columns: [
       ["kode_account", "Kode"],
       ["nama_account", "Account"],
       ["jumlah_customer", "Customer"],
       ["tipe_account", "Tipe"],
-      ["telepon", "Telepon"],
+      ["minimum_toner_tahunan", "Minimum Toner / Tahun"],
+      ["kena_ppn", "PPN"],
+      ["nama_pic_billing", "PIC Billing"],
       ["aktif", "Status"]
     ],
     fields: [
       field("kode_account", "Kode Account", "text", true),
       field("nama_account", "Nama Account", "text", true),
+      field("minimum_toner_tahunan", "Minimum Toner / Tahun (Qty)", "number", false, [], { min: 0, max: 999999999999999 }),
+      field("nama_pic_billing", "Nama PIC Billing"),
+      field("telepon_pic_billing", "Telepon PIC Billing"),
+      field("email_pic_billing", "Email PIC Billing", "email"),
+      field("kena_ppn", "PPN", "checkbox", false, [], { defaultValue: false }),
       field("npwp", "NPWP"),
       field("telepon", "Telepon Utama"),
       field("email", "Email Utama", "email"),
@@ -300,7 +321,7 @@ const configs = {
   },
   printer: {
     title: "Master Printer",
-    subtitle: "Satu baris untuk setiap unit printer.",
+    subtitle: "Unit tercatat dari Surat Tugas Penerimaan Printer.",
     endpoint: "/printer",
     search: true,
     serverPagination: true,
@@ -325,7 +346,6 @@ const configs = {
       field("tanggal_maintenance_berikutnya", "Maintenance Berikutnya", "date"),
       field("interval_maintenance_bulan", "Interval Maintenance (Bulan)", "number", false, [], { min: 1, max: 120 }),
       field("keterangan", "Keterangan", "textarea"),
-      relation("gudang_id", "Gudang Awal", "gudang", "nama_gudang", true),
     ]
   },
   toner: {
@@ -370,7 +390,7 @@ const configs = {
   },
   gudang: {
     title: "Master Gudang",
-    subtitle: "Gudang utama, cabang, atau teknisi.",
+    subtitle: "Gudang utama dan cabang.",
     endpoint: "/gudang",
     hardDelete: true,
     search: true,
@@ -385,8 +405,7 @@ const configs = {
     fields: [
       field("kode_gudang", "Kode Gudang", "text", true),
       field("nama_gudang", "Nama Gudang", "text", true),
-      field("jenis_gudang", "Jenis Gudang", "select", true, ["utama", "cabang", "teknisi"]),
-      relation("teknisi_id", "Teknisi", "pengguna", "name"),
+      field("jenis_gudang", "Jenis Gudang", "select", true, ["utama", "cabang"]),
       field("alamat", "Alamat", "textarea"),
       field("aktif", "Aktif", "checkbox")
     ]
@@ -638,7 +657,7 @@ const teknisiBar = computed(() => {
   return options.teknisi
     .map((teknisi) => ({
       label: penggunaLabel(teknisi),
-      value: counts[teknisi.id] || 0
+      value: counts[teknisi.user_id] || 0
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 5);
@@ -787,10 +806,10 @@ const crudPageComponents = {
 const currentStockComponent = computed(() => stockPageComponents[activeView.value]);
 const currentCrudComponent = computed(() => crudPageComponents[activeView.value]);
 const pageTitle = computed(() => {
+  if (activeView.value === "customer") return "Customer";
   if (activeView.value === "tiket") return "Tiket";
   if (activeView.value === "suratTugasBaru") return "Surat Tugas";
   if (activeView.value === "auditBarang") return "Audit Barang";
-  if (activeView.value === "lokasiCustomer") return "Lokasi Customer";
   if (activeView.value === "audit") return "Audit Trail";
   if (activeView.value === "rolePermission") return "Role Permission";
   if (activeView.value === "slaPending") return "SLA Pending Komplain";
@@ -798,10 +817,10 @@ const pageTitle = computed(() => {
   return currentConfig.value?.title || "Ringkasan Aplikasi";
 });
 const pageSubtitle = computed(() => {
+  if (activeView.value === "customer") return "Data customer dan alamat operasional.";
   if (activeView.value === "tiket") return "Delivery, komplain, internal, inbound, dan maintenance.";
   if (activeView.value === "suratTugasBaru") return "Pelaksanaan pekerjaan dan pergerakan unit.";
   if (activeView.value === "auditBarang") return "Riwayat perubahan printer, toner, dan sparepart.";
-  if (activeView.value === "lokasiCustomer") return "Alamat operasional customer di setiap Account.";
   if (activeView.value === "audit") return "Filter riwayat berdasarkan tanggal, nomor tiket, atau nomor surat tugas.";
   if (activeView.value === "rolePermission") return "Atur hak akses setiap role terhadap modul aplikasi.";
   if (activeView.value === "slaPending") return "Atur batas jam komplain New otomatis menjadi Pending.";
@@ -811,20 +830,90 @@ const pageSubtitle = computed(() => {
 const canCreate = computed(() => {
   if (!currentConfig.value) return false;
   if (currentConfig.value.readOnly) return false;
+  if (activeView.value === "printer") return false;
   if (isAdmin.value) return true;
   if (activeView.value === "pengaduan") return roleAktif.value === "sales_admin";
   if (activeView.value === "suratTugas") return roleAktif.value === "kepala_teknisi";
   if (activeView.value === "pengguna") return false;
   return ["admin", "warehouse"].includes(roleAktif.value);
 });
-const importableMasters = ["account", "printerKategori", "printerModel", "printer", "toner", "sukuCadang", "gudang", "pengguna"];
+const importableMasters = ["account", "printerKategori", "printerModel", "toner", "sukuCadang", "gudang", "pengguna"];
 const canImportMaster = computed(() => importableMasters.includes(activeView.value) && (isAdmin.value || (activeView.value === "gudang" && roleAktif.value === "warehouse")));
 const formTabs = computed(() => {
   if (currentConfig.value?.flow === "pengaduan") return ["general", "suratTugas"];
   if (currentConfig.value?.flow === "suratTugas") return ["general", "item"];
-  if (activeView.value === "account" && modeForm.value === "edit") return ["general", "customer"];
+  if (["printerModel", "toner"].includes(activeView.value)) return ["general", "compatible"];
   return ["general"];
 });
+const compatSide = computed(() => activeView.value === "printerModel" ? "model" : "toner");
+function compatLabel(row) {
+  return activeView.value === "printerModel"
+    ? `${row.kode_toner} - ${row.nama_toner}${row.warna ? ` (${row.warna})` : ""}`
+    : `${row.kode_model} - ${row.merek} ${row.nama_model}`;
+}
+async function muatCompat() {
+  if (!form.id) return;
+  const requestId = ++compatLinkedRequestId;
+  compatError.value = "";
+  try {
+    const response = await api.get(`/compatibility/${compatSide.value}/${form.id}`, { params: { cari: compatLinkedSearch.value.trim(), halaman: compatLinkedPage.value, batas: 10 } });
+    if (requestId !== compatLinkedRequestId) return;
+    compatRows.value = response.data.data.items;
+    compatLinkedTotal.value = response.data.data.meta.total;
+  } catch (error) {
+    if (requestId === compatLinkedRequestId) compatError.value = error.response?.data?.pesan || "Kompatibilitas gagal dimuat.";
+  }
+}
+async function cariCompat() {
+  if (!form.id) return;
+  const term = compatSearch.value.trim();
+  const requestId = ++compatRequestId;
+  if (term.length < 2) { compatOptions.value = []; compatCandidateTotal.value = 0; compatSearching.value = false; return; }
+  compatError.value = "";
+  compatSearching.value = true;
+  try {
+    const response = await api.get(`/compatibility/${compatSide.value}/${form.id}/candidates`, { params: { cari: term, halaman: compatCandidatePage.value, batas: 10 } });
+    if (requestId !== compatRequestId) return;
+    compatOptions.value = response.data.data.items;
+    compatCandidateTotal.value = response.data.data.meta.total;
+  } catch (error) {
+    if (requestId === compatRequestId) compatError.value = error.response?.data?.pesan || "Pilihan kompatibilitas gagal dimuat.";
+  } finally { if (requestId === compatRequestId) compatSearching.value = false; }
+}
+function scheduleCompatSearch() {
+  compatCandidatePage.value = 1;
+  clearTimeout(compatSearchTimer);
+  if (compatSearch.value.trim().length < 2) { ++compatRequestId; compatOptions.value = []; compatCandidateTotal.value = 0; compatSearching.value = false; return; }
+  compatSearchTimer = setTimeout(cariCompat, 250);
+}
+function scheduleCompatLinkedSearch() {
+  compatLinkedPage.value = 1;
+  clearTimeout(compatLinkedTimer);
+  compatLinkedTimer = setTimeout(muatCompat, 250);
+}
+async function tambahCompat(row) {
+  compatBusy.value = true;
+  compatError.value = "";
+  try {
+    await api.post(`/compatibility/${compatSide.value}/${form.id}`, { [activeView.value === "printerModel" ? "toner_id" : "model_id"]: row.id });
+    await muatCompat();
+    await cariCompat();
+  } catch (error) {
+    compatError.value = error.response?.data?.pesan || "Kompatibilitas gagal ditambahkan.";
+  } finally { compatBusy.value = false; }
+}
+async function hapusCompat(row) {
+  compatBusy.value = true;
+  compatError.value = "";
+  try {
+    await api.delete(`/compatibility/${compatSide.value}/${form.id}/${row.id}`);
+    await muatCompat();
+    if (!compatRows.value.length && compatLinkedPage.value > 1) { compatLinkedPage.value -= 1; await muatCompat(); }
+    if (compatSearch.value.trim().length >= 2) await cariCompat();
+  } catch (error) {
+    compatError.value = error.response?.data?.pesan || "Kompatibilitas gagal dilepas.";
+  } finally { compatBusy.value = false; }
+}
 const currentFormFields = computed(() => currentConfig.value?.fields || []);
 const currentVisibleFormFields = computed(() => currentFormFields.value.filter(tampilkanFieldForm));
 const relatedSuratTugas = computed(() => {
@@ -1017,6 +1106,17 @@ function menuContains(item, key) {
   return item.key === key || item.children?.some((child) => menuContains(child, key)) || false;
 }
 
+function expandActiveMenu(key) {
+  function expand(items) {
+    for (const item of items) {
+      if (!item.children) continue;
+      if (item.children.some((child) => menuContains(child, key))) item.terbuka = true;
+      expand(item.children);
+    }
+  }
+  menu.value.forEach((section) => expand(section.items));
+}
+
 function pilihMenu(item) {
   if (item.children) {
     toggleMenu(item);
@@ -1027,10 +1127,9 @@ function pilihMenu(item) {
     keluar();
     return;
   }
+  if (item.key === "suratTugasBaru") ticketPrefill.value = null;
   activeView.value = item.key;
-  if (item.key === "tiket") router.push("/tiket");
-  else if (item.key === "suratTugasBaru") router.push("/surat-tugas");
-  else if (route.path !== "/dashboard") router.push("/dashboard");
+  router.push(viewPaths[item.key]);
   if (item.key === "auditBarang") auditBarangTarget.value = null;
   sidebarTerbuka.value = false;
   userMenuTerbuka.value = false;
@@ -1047,13 +1146,13 @@ function pilihMenu(item) {
 function bukaSuratDariTiket(ticket) {
   ticketPrefill.value = ticket;
   activeView.value = "suratTugasBaru";
-  router.push("/surat-tugas");
+  router.push(viewPaths.suratTugasBaru);
 }
 
 async function bukaKomplainArsip(ticket) {
   try {
     activeView.value = "pengaduan";
-    await router.push("/dashboard");
+    await router.push(viewPaths.pengaduan);
     await muatHalaman();
     const response = await api.get(`/pengaduan/${ticket.pengaduan_lama_id}`);
     await bukaForm(response.data.data);
@@ -1062,9 +1161,18 @@ async function bukaKomplainArsip(ticket) {
   }
 }
 
-watch(() => route.path, (path) => {
-  if (path === "/tiket") activeView.value = "tiket";
-  else if (path === "/surat-tugas") activeView.value = "suratTugasBaru";
+watch(() => route.meta.view, (view) => {
+  if (!view || view === activeView.value) return;
+  if (view !== "suratTugasBaru") ticketPrefill.value = null;
+  activeView.value = view;
+  expandActiveMenu(view);
+  cari.value = "";
+  stokSearch.value = "";
+  resetPagination();
+  resetAuditPagination();
+  resetStockPagination();
+  pesanError.value = "";
+  muatHalaman();
 });
 
 function bukaAuditBarang(jenis, item) {
@@ -1073,6 +1181,7 @@ function bukaAuditBarang(jenis, item) {
   const kode = barangJenis === "printer" ? item.mp_no : barangJenis === "toner" ? item.master_toner?.kode_toner || item.kode_toner : item.master_suku_cadang?.kode_suku_cadang || item.kode_suku_cadang;
   auditBarangTarget.value = { jenis: barangJenis, id, kode };
   activeView.value = "auditBarang";
+  router.push(viewPaths.auditBarang);
   sidebarTerbuka.value = false;
 }
 
@@ -1080,14 +1189,16 @@ async function selesaiImpor(total) {
   const kind = importKind.value;
   importKind.value = null;
   pesanSukses.value = `${total} data berhasil diimpor.`;
+  if (kind === "lokasiCustomer") customerRefreshKey.value += 1;
   resetPagination();
-  if (kind === "lokasiCustomer") locationRefreshKey.value += 1;
-  else await muatHalaman();
+  await muatHalaman();
   await muatOptions();
 }
 
 function valueOf(item, key) {
   if (key === "tipe_account") return item.jumlah_customer > 1 ? "Multisite" : "Single";
+  if (key === "minimum_toner_tahunan") return `${Number(item.minimum_toner_tahunan || 0).toLocaleString("id-ID")} toner`;
+  if (key === "kena_ppn") return item.kena_ppn ? "PPN" : "Non-PPN";
   if (key === "kategori_unit") return item.master_printer_model?.master_printer_kategori?.nama_kategori || "-";
   if (key === "model_unit") return [item.master_printer_model?.merek, item.master_printer_model?.nama_model].filter(Boolean).join(" ") || "-";
   if (key === "lokasi_unit") return item.status === "issued" ? "Dalam surat tugas" : item.master_customer?.nama_customer || item.master_gudang?.nama_gudang || "-";
@@ -1157,7 +1268,7 @@ function picSurat(item) {
 }
 
 function nomorKomplainSurat(item) {
-  if (item?.tiket?.nomor_tiket) return item.tiket.nomor_tiket;
+  if (item?.tiket?.nomor_tiket || item?.tiket?.id) return item.tiket.nomor_tiket || item.tiket.id;
   if (item?.pengaduan?.nomor_pengaduan) return item.pengaduan.nomor_pengaduan;
   return options.pengaduan.find((row) => row.id === item?.pengaduan_id)?.nomor_pengaduan || "-";
 }
@@ -1222,12 +1333,13 @@ function templatePdfSurat(item) {
         </tr>
       `).join("")
     : `<tr><td colspan="5" class="empty">Tidak ada item/barang.</td></tr>`;
-  const validator = penggunaLabel(item.master_pengguna_surat_tugas_validasi_warehouse_olehTomaster_pengguna);
+  const warehouseRequired = Boolean(item.validasi_warehouse_pada || item.jenis_tugas?.startsWith("terima_") || item.pemakaian_barang_surat_tugas?.length > 0);
+  const validator = warehouseRequired ? penggunaLabel(item.master_pengguna_surat_tugas_validasi_warehouse_olehTomaster_pengguna) : "Tidak diperlukan";
   const authorizer = penggunaLabel(
     item.master_pengguna_surat_tugas_validasi_kepala_olehTomaster_pengguna ||
     item.master_pengguna_surat_tugas_disetujui_olehTomaster_pengguna
   );
-  const validatedAt = item.validasi_warehouse_pada ? formatTanggalPdf(item.validasi_warehouse_pada) : "";
+  const validatedAt = warehouseRequired && item.validasi_warehouse_pada ? formatTanggalPdf(item.validasi_warehouse_pada) : "";
   const authorizedAt = (item.validasi_kepala_teknisi_pada || item.disetujui_pada)
     ? formatTanggalPdf(item.validasi_kepala_teknisi_pada || item.disetujui_pada)
     : "";
@@ -1304,7 +1416,7 @@ function templatePdfSurat(item) {
 
     <table class="signatures">
       <tr>
-        <td>Validate by<span class="signature-name">${escapeHtml(validator)}${validatedAt ? `<br>${escapeHtml(validatedAt)}` : ""}</span></td>
+        <td>Validasi Gudang<span class="signature-name">${escapeHtml(validator)}${validatedAt ? `<br>${escapeHtml(validatedAt)}` : ""}</span></td>
         <td>Authorized by<span class="signature-name">${escapeHtml(authorizer)}${authorizedAt ? `<br>${escapeHtml(authorizedAt)}` : ""}</span></td>
         <td>Customer</td>
       </tr>
@@ -1316,7 +1428,7 @@ function templatePdfSurat(item) {
 
 async function cetakSuratTugas(item) {
   if (!canPrintSuratItem(item)) {
-    pesanError.value = "PDF surat tugas baru bisa dicetak setelah status Ready to Print.";
+    pesanError.value = "Mulai Surat Tugas sebelum mencetak PDF.";
     return;
   }
   const popup = window.open("", "_blank", "width=1200,height=800");
@@ -1426,7 +1538,8 @@ function canRunSuratAction(item, action) {
 }
 
 function canPrintSuratItem(item) {
-  return (activeView.value === "suratTugasBaru" || currentConfig.value?.flow === "suratTugas") && statusBisaPrint(item?.status);
+  return (activeView.value === "suratTugasBaru" || currentConfig.value?.flow === "suratTugas")
+    && (item?.alur_st_baru ? !["pending", "cancelled"].includes(item.status) : statusBisaPrint(item?.status));
 }
 
 function canTambahItemSurat() {
@@ -1531,7 +1644,7 @@ function badgeClass(value) {
 function resetForm() {
   Object.keys(form).forEach((key) => delete form[key]);
   currentConfig.value?.fields.forEach((item) => {
-    if (item.type === "checkbox") form[item.name] = true;
+    if (item.type === "checkbox") form[item.name] = item.defaultValue === undefined ? true : Boolean(item.defaultValue);
     else if (item.defaultValue === "now") form[item.name] = localDateTimeValue();
     else form[item.name] = item.defaultValue || "";
   });
@@ -1567,18 +1680,6 @@ function resetSiteForm() {
     aktif: true
   });
   siteMode.value = "create";
-}
-
-function resetFirstCustomerForm() {
-  Object.assign(firstCustomerForm, {
-    kode_customer: "",
-    nama_customer: "",
-    alamat: "",
-    nama_pic: "",
-    telepon_pic: "",
-    email_pic: "",
-    aktif: true
-  });
 }
 
 async function muatSitePelanggan(accountId = form.id) {
@@ -1630,12 +1731,25 @@ async function simpanSite() {
 
 async function bukaForm(item = null, prefill = null) {
   resetForm();
+  compatRows.value = [];
+  compatOptions.value = [];
+  compatSearch.value = "";
+  compatLinkedSearch.value = "";
+  compatLinkedPage.value = 1;
+  compatLinkedTotal.value = 0;
+  compatCandidatePage.value = 1;
+  compatCandidateTotal.value = 0;
+  compatSearching.value = false;
+  clearTimeout(compatSearchTimer);
+  clearTimeout(compatLinkedTimer);
+  ++compatRequestId;
+  ++compatLinkedRequestId;
+  compatError.value = "";
   installedPrinterSearch.value = "";
   formTab.value = "general";
   resetItemForm();
   siteRows.value = [];
   resetSiteForm();
-  resetFirstCustomerForm();
   siteFormVisible.value = false;
   modeForm.value = item ? "edit" : "create";
   if (currentConfig.value?.fields?.some((fieldItem) => fieldItem.type === "relation")) {
@@ -1672,7 +1786,7 @@ async function bukaForm(item = null, prefill = null) {
   if (form.account_id) await muatCustomerOptions(form.account_id);
   if (["pengaduan", "suratTugas"].includes(activeView.value)) await muatInstalledPrinterOptions();
   modalTerbuka.value = true;
-  if (activeView.value === "account" && form.id) await muatSitePelanggan(form.id);
+  if (form.id && ["printerModel", "toner"].includes(activeView.value)) await muatCompat();
 }
 
 function payloadForm() {
@@ -1689,17 +1803,6 @@ function payloadForm() {
     else if (item.type === "checkbox") data[item.name] = Boolean(value);
     else data[item.name] = value === "" ? null : value;
   });
-  if (activeView.value === "account" && modeForm.value === "create") {
-    data.customer_pertama = {
-      kode_customer: firstCustomerForm.kode_customer.trim(),
-      nama_customer: firstCustomerForm.nama_customer.trim(),
-      alamat: firstCustomerForm.alamat.trim(),
-      nama_pic: firstCustomerForm.nama_pic?.trim() || null,
-      telepon_pic: firstCustomerForm.telepon_pic?.trim() || null,
-      email_pic: firstCustomerForm.email_pic?.trim() || null,
-      aktif: true
-    };
-  }
   return data;
 }
 
@@ -1723,14 +1826,16 @@ async function simpanForm() {
       saved = await api.post(config.endpoint, payloadForm());
       pesanSukses.value = "Data berhasil dibuat.";
     }
-    if (activeView.value === "account") {
+    if (["printerModel", "toner"].includes(activeView.value)) {
       form.id = saved.data.data.id;
       modeForm.value = "edit";
-      formTab.value = "customer";
-      await muatSitePelanggan(form.id);
-    } else {
-      modalTerbuka.value = false;
+      formTab.value = "compatible";
+      await muatCompat();
+      await muatOptions();
+      await muatHalaman();
+      return;
     }
+    modalTerbuka.value = false;
     await muatOptions();
     await muatHalaman();
   } catch (error) {
@@ -2006,11 +2111,10 @@ async function muatOptions() {
     ["sukuCadang", "/suku-cadang"],
     ["gudang", "/gudang"],
     ["pengguna", "/pengguna"],
-    ["pengaduan", "/pengaduan"],
     ["tiket", "/tiket"],
     ["suratTugas", "/surat-tugas"]
   ];
-  const pagedOptions = new Set(["account", "printerKategori", "printerModel", "toner", "sukuCadang", "gudang", "tiket"]);
+  const pagedOptions = new Set(["account", "printerKategori", "printerModel", "toner", "sukuCadang", "gudang", "tiket", "suratTugas"]);
   const responses = await Promise.allSettled(loaders.map(([key, endpoint]) => ambilDaftarOptions(endpoint, pagedOptions.has(key))));
   const gagalWajib = [];
   responses.forEach((result, index) => {
@@ -2031,7 +2135,7 @@ async function muatOptions() {
 
 async function muatHalaman() {
   if (activeView.value === "dashboard") {
-    await Promise.all([muatOptions(), muatStok(true), muatPrinterSummary()]);
+    await Promise.all([muatOptions(), muatStok(true), muatPrinterSummary(), muatBackupReminders()]);
     return;
   }
   if (["rolePermission", "slaPending"].includes(activeView.value)) {
@@ -2076,6 +2180,15 @@ async function muatPrinterSummary() {
     Object.assign(printerSummary, response.data.data);
   } catch (error) {
     pesanError.value = error.response?.data?.pesan || "Ringkasan printer gagal dimuat.";
+  }
+}
+
+async function muatBackupReminders() {
+  try {
+    const response = await api.get("/surat-tugas/reminder-backup");
+    backupReminders.value = response.data.data || [];
+  } catch {
+    backupReminders.value = [];
   }
 }
 
@@ -2208,7 +2321,8 @@ async function muatProfil() {
     const response = await api.get("/auth/saya");
     pengguna.value = response.data.data;
     statusBackend.value = "Terhubung";
-    await Promise.all([muatOptions(), muatStok(true), muatPrinterSummary()]);
+    await Promise.all([muatOptions(), muatStok(true), muatPrinterSummary(), muatBackupReminders()]);
+    if (activeView.value !== "dashboard" && !activeStockView.value) await muatHalaman();
   } catch (error) {
     pesanError.value = error.response?.data?.pesan || "Sesi tidak valid.";
     hapusToken();
@@ -2222,7 +2336,10 @@ async function keluar() {
   await router.push({ name: "login" });
 }
 
-onMounted(muatProfil);
+onMounted(() => {
+  expandActiveMenu(activeView.value);
+  muatProfil();
+});
 </script>
 
 <template>
@@ -2367,6 +2484,7 @@ onMounted(muatProfil);
         :donut-options="donutOptions"
         :status-komplain="statusKomplain"
         :stok-barang="stokBarang"
+        :backup-reminders="backupReminders"
       />
 
       <TiketPage
@@ -2398,6 +2516,13 @@ onMounted(muatProfil);
         @save-permission="simpanPermission"
       />
 
+      <Customer
+        v-else-if="activeView === 'customer'"
+        :key="customerRefreshKey"
+        :can-manage="isAdmin"
+        @open-import="importKind = 'lokasiCustomer'"
+      />
+
       <component
         :is="currentStockComponent"
         v-else-if="activeStockView"
@@ -2405,8 +2530,8 @@ onMounted(muatProfil);
         :active-stock-view="activeStockView"
         :active-stock-group="activeStockGroup"
         :can-manage-stock="isAdmin || roleAktif === 'warehouse'"
+        :is-admin="isAdmin"
         :can-view-audit-barang="canViewAuditBarang"
-        :can-create-printer="isAdmin"
         :filtered-stok="filteredStok"
         :paginated-stok="paginatedStok"
         :stok-pagination="stokPagination"
@@ -2417,7 +2542,6 @@ onMounted(muatProfil);
         @open-stock-mutation="bukaMutasiStok"
         @previous-page="halamanSebelumnya"
         @next-page="halamanBerikutnya"
-        @create-printer="activeView = 'printer'; bukaForm()"
         @open-history="bukaAuditBarang(activeView, $event)"
       />
 
@@ -2444,13 +2568,6 @@ onMounted(muatProfil);
         @reset-audit-filter="resetAuditFilter"
         @previous-page="halamanSebelumnya"
         @next-page="halamanBerikutnya"
-      />
-
-      <LokasiCustomer
-        v-else-if="activeView === 'lokasiCustomer'"
-        :key="locationRefreshKey"
-        :can-manage="isAdmin"
-        @open-import="importKind = 'lokasiCustomer'"
       />
 
       <component
@@ -2539,12 +2656,12 @@ onMounted(muatProfil);
             :class="{ active: formTab === tab }"
             @click="formTab = tab"
           >
-            {{ tab === "suratTugas" ? "Surat Tugas" : tab === "item" ? "Item" : tab === "customer" ? "Customer" : "General" }}
+            {{ tab === "suratTugas" ? "Surat Tugas" : tab === "item" ? "Item" : tab === "customer" ? "Customer" : tab === "compatible" ? "Kompatibilitas" : "General" }}
           </button>
         </div>
 
         <form v-if="formTab === 'general'" class="data-form" @submit.prevent="simpanForm">
-          <label v-for="item in currentVisibleFormFields" :key="item.name" :class="{ 'check-field': item.type === 'checkbox' }">
+          <label v-for="item in currentVisibleFormFields.filter((field) => activeView !== 'account' || !['kena_ppn', 'aktif'].includes(field.name))" :key="item.name" :class="{ 'check-field': item.type === 'checkbox' }">
             <template v-if="item.type === 'checkbox'">
               <input v-model="form[item.name]" type="checkbox" />
               <span>{{ item.label }}</span>
@@ -2578,15 +2695,9 @@ onMounted(muatProfil);
             </template>
           </label>
 
-          <div v-if="activeView === 'account' && modeForm === 'create'" class="form-section-title">Customer pertama</div>
-          <template v-if="activeView === 'account' && modeForm === 'create'">
-            <label><span>Kode Customer</span><input v-model="firstCustomerForm.kode_customer" type="text" required /></label>
-            <label><span>Nama Customer</span><input v-model="firstCustomerForm.nama_customer" type="text" required /></label>
-            <label><span>Alamat Operasional</span><textarea v-model="firstCustomerForm.alamat" rows="3" required /></label>
-            <label><span>Nama PIC</span><input v-model="firstCustomerForm.nama_pic" type="text" /></label>
-            <label><span>Telepon PIC</span><input v-model="firstCustomerForm.telepon_pic" type="tel" /></label>
-            <label><span>Email PIC</span><input v-model="firstCustomerForm.email_pic" type="email" /></label>
-          </template>
+          <div v-if="activeView === 'account'" class="account-check-row">
+            <label v-for="item in currentVisibleFormFields.filter((field) => ['kena_ppn', 'aktif'].includes(field.name))" :key="item.name" class="check-field"><input v-model="form[item.name]" type="checkbox" /><span>{{ item.label }}</span></label>
+          </div>
 
           <div class="modal-actions">
             <button class="secondary-button" type="button" @click="modalTerbuka = false">Batal</button>
@@ -2596,6 +2707,20 @@ onMounted(muatProfil);
             </button>
           </div>
         </form>
+
+        <section v-else-if="formTab === 'compatible' && ['printerModel', 'toner'].includes(activeView)" class="tab-panel compatible-panel">
+          <p v-if="!form.id" class="helper-text">Simpan master terlebih dahulu.</p>
+          <template v-else>
+            <div class="compatible-heading"><strong>{{ activeView === 'printerModel' ? 'Toner Kompatibel' : 'Model Printer Kompatibel' }}</strong><span>{{ compatLinkedTotal }} terhubung</span></div>
+            <label class="compatible-filter"><Search :size="16" /><input v-model="compatLinkedSearch" type="search" placeholder="Cari yang terhubung" @input="scheduleCompatLinkedSearch" /></label>
+            <div class="compatible-list"><div v-for="row in compatRows" :key="row.id" class="compatible-row"><span>{{ compatLabel(row) }}</span><button v-if="isAdmin" class="icon-action danger" type="button" :disabled="compatBusy" :aria-label="`Lepas ${compatLabel(row)}`" @click="hapusCompat(row)"><X :size="16" /></button></div><p v-if="!compatRows.length" class="helper-text">{{ compatLinkedSearch ? 'Tidak ada pasangan yang cocok.' : 'Belum ada pasangan kompatibel.' }}</p></div>
+            <div v-if="compatLinkedTotal > 10" class="compatible-pager"><span>Halaman {{ compatLinkedPage }} dari {{ Math.ceil(compatLinkedTotal / 10) }}</span><button class="secondary-button" type="button" :disabled="compatLinkedPage <= 1" @click="compatLinkedPage--; muatCompat()">Sebelumnya</button><button class="secondary-button" type="button" :disabled="compatLinkedPage >= Math.ceil(compatLinkedTotal / 10)" @click="compatLinkedPage++; muatCompat()">Berikutnya</button></div>
+            <form v-if="isAdmin" class="compatible-search" @submit.prevent="compatCandidatePage = 1; cariCompat()"><label><span>Tambah {{ activeView === 'printerModel' ? 'toner' : 'model printer' }}</span><input v-model="compatSearch" type="search" :placeholder="activeView === 'printerModel' ? 'Cari kode atau nama toner' : 'Cari kode atau nama model'" @input="scheduleCompatSearch" /></label><button class="secondary-button" type="submit" :disabled="compatSearch.trim().length < 2"><Search :size="16" />Cari</button></form>
+            <div v-if="isAdmin && compatSearch.trim().length >= 2" class="compatible-list"><p v-if="compatSearching" class="helper-text">Mencari...</p><template v-else><div v-for="row in compatOptions" :key="row.id" class="compatible-row"><span>{{ compatLabel(row) }}</span><button class="secondary-button" type="button" :disabled="compatBusy" @click="tambahCompat(row)"><Plus :size="15" />Pilih</button></div><p v-if="!compatOptions.length" class="helper-text">Tidak ada kandidat yang cocok.</p></template></div>
+            <div v-if="isAdmin && compatCandidateTotal > 10" class="compatible-pager"><span>Halaman {{ compatCandidatePage }} dari {{ Math.ceil(compatCandidateTotal / 10) }}</span><button class="secondary-button" type="button" :disabled="compatCandidatePage <= 1" @click="compatCandidatePage--; cariCompat()">Sebelumnya</button><button class="secondary-button" type="button" :disabled="compatCandidatePage >= Math.ceil(compatCandidateTotal / 10)" @click="compatCandidatePage++; cariCompat()">Berikutnya</button></div>
+            <p v-if="compatError" class="location-error" role="alert">{{ compatError }}</p>
+          </template>
+        </section>
 
         <section v-else-if="activeView === 'account' && formTab === 'customer'" class="tab-panel site-panel">
           <div class="site-panel-heading">

@@ -4,7 +4,11 @@ const bcrypt = require("bcryptjs");
 const prisma = new PrismaClient();
 
 async function main() {
-  const kata_sandi_hash = await bcrypt.hash("Admin123", 10);
+  const initialPassword = process.env.SEED_INITIAL_PASSWORD;
+  if (!initialPassword || initialPassword.length < 12) {
+    throw new Error("SEED_INITIAL_PASSWORD wajib diisi minimal 12 karakter.");
+  }
+  const kata_sandi_hash = await bcrypt.hash(initialPassword, 10);
   const akunRole = [
     { user_id: "admin", nama: "Admin Multiprint", email: "admin@multiprint.local", peran: "admin" },
     { user_id: "sales", nama: "Sales Multiprint", email: "sales@multiprint.local", peran: "sales" },
@@ -14,34 +18,21 @@ async function main() {
     { user_id: "warehouse", nama: "Warehouse Multiprint", email: "warehouse@multiprint.local", peran: "warehouse" }
   ];
 
-  for (const akun of akunRole) {
-    const existing = await prisma.master_pengguna.findFirst({
-      where: { user_id: akun.user_id }
-    });
-
-    if (existing) {
-      await prisma.master_pengguna.update({
-        where: { id: existing.id },
+  await prisma.$transaction(async (tx) => {
+    if (await tx.master_pengguna.count() > 0) {
+      throw new Error("Seed akun hanya boleh dijalankan pada database tanpa pengguna.");
+    }
+    for (const akun of akunRole) {
+      await tx.master_pengguna.create({
         data: {
-          nama: akun.nama,
-          email: akun.email,
-          peran: akun.peran,
+          ...akun,
+          telepon: "000",
           aktif: true,
           kata_sandi_hash
         }
       });
-      continue;
     }
-
-    await prisma.master_pengguna.create({
-      data: {
-        ...akun,
-        telepon: "000",
-        aktif: true,
-        kata_sandi_hash
-      }
-    });
-  }
+  });
 }
 
 main()

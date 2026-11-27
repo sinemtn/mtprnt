@@ -51,6 +51,37 @@ function tugasWajib(kategori, jenis, mode) {
   return allowed.filter((value) => value !== "terima_tukar" || mode === "tukar");
 }
 
+function unitDikecualikan(line) {
+  return Boolean(line.pengecualian_disetujui_pada);
+}
+
+function unitSelesai(surat, line, tiket = surat.tiket) {
+  if (unitDikecualikan(line)) return true;
+  if (!surat.jenis_tugas) return true;
+  if (PENERIMAAN_PRINTER.includes(surat.jenis_tugas)) return Boolean(line.konfirmasi_terima_pada);
+  if (PENGIRIMAN_PRINTER.includes(surat.jenis_tugas)) {
+    const dariTrial = surat.jenis_tugas === "kirim_kontrak" && tiket?.tiket_asal_id;
+    return Boolean(line.konfirmasi_serah_pada && (dariTrial || line.konfirmasi_keluar_pada) && line.hasil && line.hasil.toLowerCase() !== "tertunda");
+  }
+  return Boolean(line.hasil && line.hasil.toLowerCase() !== "tertunda");
+}
+
+function reviewTiket(item) {
+  const tasks = item.surat_tugas || [];
+  const required = tugasWajib(item.kategori, item.jenis, item.mode);
+  if (required.some((jenis) => !tasks.some((st) => st.jenis_tugas === jenis && st.status === "solved"))) return "Seluruh jenis ST wajib harus selesai sebelum tiket ditutup.";
+  if (!tasks.some((st) => st.status === "solved")) return "Minimal satu Surat Tugas harus selesai sebelum tiket ditutup.";
+  if (tasks.some((st) => !["solved", "cancelled"].includes(st.status))) return "Masih ada ST yang berjalan.";
+  if (tasks.some((st) => st.status === "solved" && st.surat_tugas_printer?.some((line) => !unitSelesai(st, line, item)))) return "Masih ada unit ST yang belum selesai atau belum disetujui pengecualiannya.";
+  if (item.jenis === "trial" && !["berhasil", "gagal", "batal"].includes(item.hasil)) return "Hasil TRIAL harus dicatat sebelum ditutup.";
+  if ((item.jenis === "back_up" && item.mode === "permanen" || item.jenis === "kontrak" && item.mode === "tukar")
+    && !tasks.some((st) => ["terima_unit_rusak", "terima_tukar"].includes(st.jenis_tugas) && st.status === "solved"
+      && st.surat_tugas_printer?.some((line) => line.mp_no === item.mp_no && line.konfirmasi_terima_pada))) {
+    return "Unit lama harus benar-benar diterima Warehouse sebelum tiket ditutup.";
+  }
+  return null;
+}
+
 module.exports = {
   JENIS_TIKET,
   JENIS_ST,
@@ -60,5 +91,8 @@ module.exports = {
   PEMILIK_TIKET,
   kategoriUntukJenisSt,
   jenisStDiizinkan,
-  tugasWajib
+  tugasWajib,
+  unitDikecualikan,
+  unitSelesai,
+  reviewTiket
 };

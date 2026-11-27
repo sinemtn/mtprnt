@@ -4,7 +4,7 @@ const active = column("aktif", "Aktif", false, "ya", "ya/tidak; kosong = ya", { 
 
 const formats = {
   account: {
-    title: "Account dan Customer Pertama",
+    title: "Billing",
     code: "kode_account",
     columns: [
       column("kode_account", "Kode Account", true, "ACC-001", "Unik global", { max: 50 }),
@@ -13,9 +13,14 @@ const formats = {
       column("telepon", "Telepon Account", false, "0211234567", "", { max: 50 }),
       column("email", "Email Account", false, "admin@contoh.co.id", "", { type: "email", max: 150 }),
       column("alamat_penagihan", "Alamat Penagihan", false, "Jakarta", ""),
-      column("kode_customer", "Kode Customer Pertama", true, "CUS-001", "Customer pertama dibuat bersama Account", { max: 50 }),
-      column("nama_customer", "Nama Customer Pertama", true, "Kantor Pusat", "", { max: 200 }),
-      column("alamat_customer", "Alamat Customer", true, "Jl. Contoh No. 1, Jakarta", "Alamat operasional"),
+      column("minimum_toner_tahunan", "Minimum Toner per Tahun (Qty)", false, "24", "Target jumlah toner per tahun; kosong = 0", { type: "integer", min: 0, max: 999999999999999, default: 0 }),
+      column("nama_pic_billing", "Nama PIC Billing", false, "Ani", "", { max: 150 }),
+      column("telepon_pic_billing", "Telepon PIC Billing", false, "08123456789", "", { max: 50 }),
+      column("email_pic_billing", "Email PIC Billing", false, "ani@contoh.co.id", "", { type: "email", max: 150 }),
+      column("kena_ppn", "Kena PPN", false, "tidak", "ya/tidak; kosong = tidak", { type: "boolean", default: false }),
+      column("kode_customer", "Kode Customer Pertama", false, "CUS-001", "Opsional; isi bersama nama dan alamat jika ingin membuat Customer", { max: 50 }),
+      column("nama_customer", "Nama Customer Pertama", false, "Kantor Pusat", "", { max: 200 }),
+      column("alamat_customer", "Alamat Customer", false, "Jl. Contoh No. 1, Jakarta", "Alamat operasional"),
       column("nama_pic", "Nama PIC", false, "Budi", "", { max: 150 }),
       column("telepon_pic", "Telepon PIC", false, "08123456789", "", { max: 50 }),
       column("email_pic", "Email PIC", false, "budi@contoh.co.id", "", { type: "email", max: 150 }),
@@ -23,12 +28,12 @@ const formats = {
     ]
   },
   lokasiCustomer: {
-    title: "Lokasi Customer",
+    title: "Customer",
     code: "kode_customer",
     columns: [
       column("kode_account", "Kode Account", true, "ACC-001", "Account harus sudah ada dan aktif", { max: 50 }),
       column("kode_customer", "Kode Customer", true, "CUS-002", "Unik dalam Account", { max: 50 }),
-      column("nama_customer", "Nama Lokasi Customer", true, "Cabang Bandung", "", { max: 200 }),
+      column("nama_customer", "Nama Customer", true, "Cabang Bandung", "", { max: 200 }),
       column("alamat", "Alamat", true, "Jl. Contoh No. 2, Bandung", "Alamat operasional"),
       column("nama_pic", "Nama PIC", false, "Sari", "", { max: 150 }),
       column("telepon_pic", "Telepon PIC", false, "08123456780", "", { max: 50 }),
@@ -96,8 +101,7 @@ const formats = {
     columns: [
       column("kode_gudang", "Kode Gudang", true, "GDG-01", "Unik global", { max: 50 }),
       column("nama_gudang", "Nama Gudang", true, "Gudang Utama", "", { max: 150 }),
-      column("jenis_gudang", "Jenis Gudang", true, "utama", "utama/cabang/teknisi", { choices: ["utama", "cabang", "teknisi"] }),
-      column("user_id_teknisi", "User ID Teknisi", false, "teknisi", "Isi hanya untuk gudang teknisi", { max: 20 }),
+      column("jenis_gudang", "Jenis Gudang", true, "utama", "utama/cabang", { choices: ["utama", "cabang"] }),
       column("alamat", "Alamat", false, "Jakarta", ""),
       active
     ]

@@ -68,7 +68,11 @@ async function cleanup() {
     await tx.master_printer.deleteMany({ where: { id: { in: ids.printer } } });
     await tx.master_printer_model.deleteMany({ where: { id: { in: ids.model } } });
     await tx.master_printer_kategori.deleteMany({ where: { id: { in: ids.category } } });
-    await tx.master_customer.deleteMany({ where: { id: { in: ids.customer } } });
+    const createdAccounts = await tx.master_account.findMany({ where: { id: { in: ids.account } }, select: { kode_account: true } });
+    await tx.master_customer.deleteMany({ where: { OR: [
+      { id: { in: ids.customer } },
+      { account_id: { in: createdAccounts.map((account) => account.kode_account) } }
+    ] } });
     await tx.master_account.deleteMany({ where: { id: { in: ids.account } } });
     await tx.master_toner.deleteMany({ where: { id: { in: ids.toner } } });
     await tx.master_suku_cadang.deleteMany({ where: { id: { in: ids.spare } } });
@@ -84,7 +88,6 @@ test("template and bulk import for every visible master", async () => {
     const modelCode = `IMP-M-${suffix}`;
     const warehouseCode = `IMP-G-${suffix}`;
     const accountCode = `IMP-A-${suffix}`;
-    const printerCode = `IMP-P-${suffix}`;
     const categoryFormat = await get(admin, "/master-import/printerKategori/format");
     const forbidden = await upload(sales, "printerKategori", "preview", [{ kode_kategori: categoryCode, nama_kategori: "Test" }], categoryFormat.columns.map((column) => column.key));
     assert.equal(forbidden.status, 403);
@@ -98,27 +101,17 @@ test("template and bulk import for every visible master", async () => {
     await importRows(admin, "printerKategori", [{ kode_kategori: categoryCode, nama_kategori: "Laser" }], "kode_kategori");
     await importRows(admin, "printerModel", [{ kode_kategori: categoryCode, kode_model: modelCode, merek: "HP", nama_model: "M404" }], "kode_model");
     await importRows(admin, "gudang", [{ kode_gudang: warehouseCode, nama_gudang: "Gudang Impor", jenis_gudang: "utama" }], "kode_gudang");
-    const account = await importRows(admin, "account", [{ kode_account: accountCode, nama_account: "PT Import", kode_customer: `IMP-C-${suffix}`, nama_customer: "Pusat", alamat_customer: "Jakarta" }], "kode_account");
-    const firstCustomer = await prisma.master_customer.findFirst({ where: { account_id: account[0].id } });
+    const account = await importRows(admin, "account", [{ kode_account: accountCode, nama_account: "PT Import", kode_customer: `IMP-C-${suffix}`, nama_customer: "Pusat", alamat_customer: "Jakarta", nama_pic: "PIC Impor" }], "kode_account");
+    assert.equal(Number(account[0].minimum_toner_tahunan), 0);
+    assert.equal(account[0].kena_ppn, false);
+    const firstCustomer = await prisma.master_customer.findFirst({ where: { account_id: account[0].kode_account } });
     assert.ok(firstCustomer);
+    assert.equal((await prisma.master_customer_pic.findFirst({ where: { customer_id: firstCustomer.id } })).nama_pic, "PIC Impor");
     ids.customer.push(firstCustomer.id);
     const site = await importRows(admin, "lokasiCustomer", [{ kode_account: accountCode, kode_customer: `IMP-C2-${suffix}`, nama_customer: "Cabang", alamat: "Bandung" }], "kode_customer");
-    assert.equal(site[0].account_id, account[0].id);
-    const printer = await importRows(admin, "printer", [{
-      mp_no: printerCode, serial_number: `IMP-SN-${suffix}`, kode_model: modelCode, kode_gudang: warehouseCode,
-      tanggal_pembelian: "2026-01-10", tanggal_maintenance_berikutnya: "2027-01-10", interval_maintenance_bulan: 6
-    }], "mp_no");
-    assert.equal(printer[0].status, "available");
-    assert.equal(printer[0].gudang_id, ids.gudang[0]);
-    assert.equal(printer[0].tanggal_pembelian.toISOString().slice(0, 10), "2026-01-10");
-    assert.equal(printer[0].interval_maintenance_bulan, 6);
-    const oldHeaders = (await get(admin, "/master-import/printer/format")).columns
-      .filter((column) => !["tanggal_pembelian", "tanggal_maintenance_berikutnya", "interval_maintenance_bulan"].includes(column.key))
-      .map((column) => column.key);
-    const oldPreview = await upload(admin, "printer", "preview", [{ mp_no: `IMP-OLD-${suffix}`, kode_model: modelCode, kode_gudang: warehouseCode }], oldHeaders);
-    assert.equal(oldPreview.status, 200);
-    assert.deepEqual(oldPreview.data.errors, []);
-    assert.equal((await prisma.riwayat_audit.count({ where: { jenis_dokumen: "barang_printer", id_sumber: printer[0].id, aksi: "buat" } })), 1);
+    assert.equal(site[0].account_id, account[0].kode_account);
+    const printerFormat = await fetch(`${base}/master-import/printer/format`, { headers: { authorization: `Bearer ${admin}` } });
+    assert.equal(printerFormat.status, 409);
 
     const tonerCode = `IMP-T-${suffix}`;
     const tonerRows = [1, 2].map((index) => ({ kode_toner: `${tonerCode}-${index}`, nama_toner: `Toner ${index}`, warna: "Hitam", tipe: "Laser" }));
@@ -155,8 +148,8 @@ test("template and bulk import for every visible master", async () => {
     assert.ok(inFileDuplicate.data.errors.some((item) => item.pesan.includes("Duplikat")));
     const formula = await upload(admin, "toner", "preview", [{ kode_toner: { formula: "1+1", result: 2 }, nama_toner: "Formula", warna: "Cyan", tipe: "Laser" }], headers);
     assert.ok(formula.data.errors.some((item) => item.kolom === "kode_toner" && item.pesan.includes("Formula")));
-    const brokenReference = await upload(admin, "printer", "preview", [{ mp_no: `IMP-BAD-${suffix}`, kode_model: "NO-MODEL", kode_gudang: warehouseCode }], (await get(admin, "/master-import/printer/format")).columns.map((column) => column.key));
-    assert.ok(brokenReference.data.errors.some((error) => error.kolom === "kode_model"));
+    const brokenReference = await upload(admin, "printerModel", "preview", [{ kode_kategori: "NO-CATEGORY", kode_model: `IMP-BAD-${suffix}`, merek: "HP", nama_model: "Unknown" }], (await get(admin, "/master-import/printerModel/format")).columns.map((column) => column.key));
+    assert.ok(brokenReference.data.errors.some((error) => error.kolom === "kode_kategori"));
   } finally {
     await cleanup();
     await prisma.$disconnect();

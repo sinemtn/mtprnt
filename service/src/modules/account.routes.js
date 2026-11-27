@@ -24,8 +24,19 @@ const skemaAccount = z.object({
   telepon: teksOpsional,
   email: z.string().email().optional().nullable().or(z.literal("")),
   alamat_penagihan: teksOpsional,
+  minimum_toner_tahunan: z.number().int().min(0).max(999999999999999).optional(),
+  nama_pic_billing: teksOpsional,
+  telepon_pic_billing: teksOpsional,
+  email_pic_billing: z.string().email().optional().nullable().or(z.literal("")),
+  kena_ppn: z.boolean().optional(),
   aktif: z.boolean().optional()
 });
+const skemaPic = z.object({
+  nama_pic: z.string().trim().min(1).max(150),
+  telepon_pic: z.string().trim().max(50).optional().nullable(),
+  email_pic: z.string().trim().email().max(150).optional().nullable().or(z.literal(""))
+});
+const skemaCustomerDenganPic = skemaCustomer.extend({ pics: z.array(skemaPic).default([]) });
 const daftarQuery = z.object({
   halaman: z.coerce.number().int().min(1).default(1),
   batas: z.coerce.number().int().min(1).max(100).default(20),
@@ -37,28 +48,32 @@ function konflik(pesan) {
 }
 
 async function kunciAccount(tx, accountId) {
-  const rows = await tx.$queryRaw`SELECT id FROM master_account WHERE id = ${accountId}::uuid FOR UPDATE`;
+  const rows = await tx.$queryRaw`SELECT id FROM master_account WHERE slug = ${accountId}::uuid FOR UPDATE`;
   if (!rows.length) throw Object.assign(new Error("Account tidak ditemukan."), { statusCode: 404 });
 }
 
 async function relasiCustomer(tx, customerId) {
-  const [kontrak, printer, komplain, surat, tiket] = await Promise.all([
-    tx.master_kontrak.count({ where: { customer_id: customerId } }),
-    tx.master_printer.count({ where: { customer_id: customerId } }),
-    tx.pengaduan.count({ where: { customer_id: customerId } }),
-    tx.surat_tugas.count({ where: { customer_id: customerId } }),
-    tx.tiket.count({ where: { customer_id: customerId } })
+  const customer = await tx.master_customer.findUnique({ where: { id: customerId } });
+  if (!customer) return 0;
+  const [kontrak, printer, surat, tiket] = await Promise.all([
+    tx.master_kontrak.count({ where: { customer_id: customer.kode_customer } }),
+    tx.master_printer.count({ where: { customer_id: customer.kode_customer } }),
+    tx.surat_tugas.count({ where: { master_customer: { is: { id: customerId } } } }),
+    tx.tiket.count({ where: { customer_id: customer.kode_customer } })
   ]);
-  return kontrak + printer + komplain + surat + tiket;
+  return kontrak + printer + surat + tiket;
 }
 
 async function daftarCustomer(tx, accountId) {
+  const account = await tx.master_account.findUnique({ where: { id: accountId } });
   const rows = await tx.master_customer.findMany({
-    where: { account_id: accountId },
-    orderBy: { tanggal_dibuat: "asc" }
+    where: { account_id: account.kode_account },
+    orderBy: { tanggal_dibuat: "asc" },
+    include: { master_customer_pic: { orderBy: [{ tanggal_dibuat: "asc" }, { id: "asc" }] } }
   });
   return Promise.all(rows.map(async (row) => ({
     ...row,
+    account_id: account.id,
     boleh_hapus_permanen: rows.length > 1 && !(await relasiCustomer(tx, row.id))
   })));
 }
@@ -68,7 +83,7 @@ router.use(autentikasi);
 router.get("/", lihat, asyncHandler(async (req, res) => {
   const query = daftarQuery.parse(req.query);
   const where = query.cari ? {
-    OR: ["kode_account", "nama_account", "npwp", "telepon"].map((field) => ({
+    OR: ["kode_account", "nama_account", "npwp", "telepon", "email", "alamat_penagihan", "nama_pic_billing"].map((field) => ({
       [field]: { contains: query.cari, mode: "insensitive" }
     }))
   } : {};
@@ -83,7 +98,7 @@ router.get("/", lihat, asyncHandler(async (req, res) => {
     })
   ]);
   const items = await Promise.all(rows.map(async (row) => {
-    const children = await prisma.master_customer.findMany({ where: { account_id: row.id }, select: { id: true } });
+    const children = await prisma.master_customer.findMany({ where: { account_id: row.kode_account }, select: { id: true } });
     const used = await Promise.all(children.map((child) => relasiCustomer(prisma, child.id)));
     return {
       ...row,
@@ -101,9 +116,10 @@ router.get("/lokasi-customer", lihat, asyncHandler(async (req, res) => {
   const query = daftarQuery.parse(req.query);
   const where = query.cari ? {
     OR: [
-      ...["kode_customer", "nama_customer", "alamat"].map((field) => ({
+      ...["kode_customer", "nama_customer", "alamat", "nama_pic", "telepon_pic"].map((field) => ({
         [field]: { contains: query.cari, mode: "insensitive" }
       })),
+      { master_customer_pic: { some: { nama_pic: { contains: query.cari, mode: "insensitive" } } } },
       { master_account: { nama_account: { contains: query.cari, mode: "insensitive" } } }
     ]
   } : {};
@@ -111,7 +127,10 @@ router.get("/lokasi-customer", lihat, asyncHandler(async (req, res) => {
     prisma.master_customer.count({ where }),
     prisma.master_customer.findMany({
       where,
-      include: { master_account: { select: { id: true, kode_account: true, nama_account: true, aktif: true } } },
+      include: {
+        master_account: { select: { id: true, kode_account: true, nama_account: true, aktif: true } },
+        master_customer_pic: { orderBy: [{ tanggal_dibuat: "asc" }, { id: "asc" }] }
+      },
       orderBy: [{ master_account: { nama_account: "asc" } }, { nama_customer: "asc" }],
       skip: (query.halaman - 1) * query.batas,
       take: query.batas
@@ -125,6 +144,7 @@ router.get("/lokasi-customer", lihat, asyncHandler(async (req, res) => {
     ]);
     return {
       ...row,
+      account_id: row.master_account.id,
       boleh_nonaktifkan: row.aktif && activeAccount > 1,
       boleh_hapus_permanen: totalAccount > 1 && !relations
     };
@@ -138,23 +158,26 @@ router.get("/lokasi-customer", lihat, asyncHandler(async (req, res) => {
 router.get("/:id", lihat, asyncHandler(async (req, res) => {
   const account = await prisma.master_account.findUnique({
     where: { id: req.params.id },
-    include: { master_customer: { orderBy: { tanggal_dibuat: "asc" } } }
+    include: { master_customer: { orderBy: { tanggal_dibuat: "asc" }, include: { master_customer_pic: true } } }
   });
   if (!account) return gagal(res, "Account tidak ditemukan.", 404);
   return sukses(res, "Account berhasil diambil.", account);
 }));
 
 router.post("/", izin("master_data", "create", "admin"), asyncHandler(async (req, res) => {
-  const body = skemaAccount.extend({ customer_pertama: skemaCustomer }).parse(req.body);
-  if (body.aktif === false || body.customer_pertama.aktif === false) {
+  const body = skemaAccount.extend({ customer_pertama: skemaCustomerDenganPic.optional() }).parse(req.body);
+  if (body.customer_pertama && (body.aktif === false || body.customer_pertama.aktif === false)) {
     return gagal(res, "Account dan Customer pertama harus aktif.", 422);
   }
   const { customer_pertama, ...accountData } = body;
+  const firstCustomer = customer_pertama && (({ pics, ...customer }) => ({
+    ...customer, ...(pics.length ? { master_customer_pic: { create: pics } } : {})
+  }))(customer_pertama);
   const item = await prisma.master_account.create({
-    data: { ...accountData, master_customer: { create: customer_pertama } },
+    data: { ...accountData, ...(firstCustomer ? { master_customer: { create: firstCustomer } } : {}) },
     include: { master_customer: true }
   });
-  return sukses(res, "Account dan Customer pertama berhasil dibuat.", item, 201);
+  return sukses(res, customer_pertama ? "Account dan Customer pertama berhasil dibuat." : "Account berhasil dibuat.", item, 201);
 }));
 
 router.put("/:id", izin("master_data", "update", "admin"), asyncHandler(async (req, res) => {
@@ -166,11 +189,12 @@ router.put("/:id", izin("master_data", "update", "admin"), asyncHandler(async (r
 router.delete("/:id/permanent", izin("master_data", "delete", "admin"), asyncHandler(async (req, res) => {
   await prisma.$transaction(async (tx) => {
     await kunciAccount(tx, req.params.id);
-    const children = await tx.master_customer.findMany({ where: { account_id: req.params.id }, select: { id: true } });
+    const account = await tx.master_account.findUnique({ where: { id: req.params.id } });
+    const children = await tx.master_customer.findMany({ where: { account_id: account.kode_account }, select: { id: true } });
     for (const child of children) {
       if (await relasiCustomer(tx, child.id)) throw konflik("Account masih dipakai oleh data lain.");
     }
-    await tx.master_customer.deleteMany({ where: { account_id: req.params.id } });
+    await tx.master_customer.deleteMany({ where: { account_id: account.kode_account } });
     await tx.master_account.delete({ where: { id: req.params.id } });
   });
   return sukses(res, "Account berhasil dihapus permanen.");
@@ -188,33 +212,74 @@ router.get("/:id/customer", lihat, asyncHandler(async (req, res) => {
 }));
 
 router.post("/:id/customer", izin("master_data", "create", "admin"), asyncHandler(async (req, res) => {
-  const body = skemaCustomer.parse(req.body);
+  const { pics, ...body } = skemaCustomerDenganPic.parse(req.body);
   const account = await prisma.master_account.findUnique({ where: { id: req.params.id } });
   if (!account?.aktif) return gagal(res, "Pilih Account aktif.", 422);
-  const item = await prisma.master_customer.create({ data: { ...body, account_id: account.id } });
-  return sukses(res, "Customer berhasil dibuat.", item, 201);
+  const item = await prisma.master_customer.create({ data: { ...body, account_id: account.kode_account,
+    ...(pics.length ? { master_customer_pic: { create: pics } } : {})
+  } });
+  return sukses(res, "Customer berhasil dibuat.", { ...item, account_id: account.id }, 201);
+}));
+
+async function customerPicTarget(req) {
+  const customer = await prisma.master_customer.findUnique({ where: { id: req.params.customerId }, select: { id: true, master_account: { select: { id: true } } } });
+  if (!customer || customer.master_account.id !== req.params.id) {
+    throw Object.assign(new Error("Customer tidak ditemukan pada Billing ini."), { statusCode: 404 });
+  }
+  return customer;
+}
+
+router.get("/:id/customer/:customerId/pic", lihat, asyncHandler(async (req, res) => {
+  await customerPicTarget(req);
+  const items = await prisma.master_customer_pic.findMany({ where: { customer_id: req.params.customerId }, orderBy: [{ tanggal_dibuat: "asc" }, { id: "asc" }] });
+  return sukses(res, "PIC Customer berhasil diambil.", { items });
+}));
+
+router.post("/:id/customer/:customerId/pic", izin("master_data", "create", "admin"), asyncHandler(async (req, res) => {
+  await customerPicTarget(req);
+  const body = skemaPic.parse(req.body);
+  const item = await prisma.master_customer_pic.create({ data: { customer_id: req.params.customerId, ...body } });
+  return sukses(res, "PIC Customer berhasil ditambahkan.", item, 201);
+}));
+
+router.put("/:id/customer/:customerId/pic/:picId", izin("master_data", "update", "admin"), asyncHandler(async (req, res) => {
+  await customerPicTarget(req);
+  const current = await prisma.master_customer_pic.findFirst({ where: { id: req.params.picId, customer_id: req.params.customerId } });
+  if (!current) return gagal(res, "PIC Customer tidak ditemukan.", 404);
+  const item = await prisma.master_customer_pic.update({ where: { id: current.id }, data: { ...skemaPic.parse(req.body), tanggal_diperbarui: new Date() } });
+  return sukses(res, "PIC Customer berhasil diperbarui.", item);
+}));
+
+router.delete("/:id/customer/:customerId/pic/:picId", izin("master_data", "delete", "admin"), asyncHandler(async (req, res) => {
+  await customerPicTarget(req);
+  const removed = await prisma.master_customer_pic.deleteMany({ where: { id: req.params.picId, customer_id: req.params.customerId } });
+  if (!removed.count) return gagal(res, "PIC Customer tidak ditemukan.", 404);
+  return sukses(res, "PIC Customer berhasil dihapus.");
 }));
 
 router.put("/:id/customer/:customerId", izin("master_data", "update", "admin"), asyncHandler(async (req, res) => {
   const body = skemaCustomer.partial().parse(req.body);
   const item = await prisma.$transaction(async (tx) => {
     await kunciAccount(tx, req.params.id);
-    const current = await tx.master_customer.findFirst({ where: { id: req.params.customerId, account_id: req.params.id } });
+    const current = await tx.master_customer.findUnique({ where: { id: req.params.customerId } });
     if (!current) return null;
+    const targetAccount = await tx.master_account.findUnique({ where: { id: req.params.id } });
+    if (!targetAccount?.aktif) throw konflik("Pilih Billing aktif.");
     if (body.aktif === false && current.aktif) {
-      const active = await tx.master_customer.count({ where: { account_id: req.params.id, aktif: true } });
+      const active = await tx.master_customer.count({ where: { account_id: current.account_id, aktif: true } });
       if (active <= 1) throw konflik("Customer aktif terakhir tidak dapat dinonaktifkan.");
     }
-    return tx.master_customer.update({ where: { id: current.id }, data: body });
+    return tx.master_customer.update({ where: { id: current.id }, data: { ...body, account_id: targetAccount.kode_account } });
   });
   if (!item) return gagal(res, "Customer tidak ditemukan.", 404);
-  return sukses(res, "Customer berhasil diperbarui.", item);
+  return sukses(res, "Customer berhasil diperbarui.", { ...item, account_id: req.params.id });
 }));
 
 router.delete("/:id/customer/:customerId/permanent", izin("master_data", "delete", "admin"), asyncHandler(async (req, res) => {
   await prisma.$transaction(async (tx) => {
     await kunciAccount(tx, req.params.id);
-    const children = await tx.master_customer.findMany({ where: { account_id: req.params.id }, select: { id: true } });
+    const account = await tx.master_account.findUnique({ where: { id: req.params.id } });
+    const children = await tx.master_customer.findMany({ where: { account_id: account.kode_account }, select: { id: true } });
     if (!children.some((child) => child.id === req.params.customerId)) {
       throw Object.assign(new Error("Customer tidak ditemukan."), { statusCode: 404 });
     }
@@ -228,10 +293,12 @@ router.delete("/:id/customer/:customerId/permanent", izin("master_data", "delete
 router.delete("/:id/customer/:customerId", izin("master_data", "delete", "admin"), asyncHandler(async (req, res) => {
   const item = await prisma.$transaction(async (tx) => {
     await kunciAccount(tx, req.params.id);
-    const current = await tx.master_customer.findFirst({ where: { id: req.params.customerId, account_id: req.params.id } });
+    const account = await tx.master_account.findUnique({ where: { id: req.params.id } });
+    if (!account) return null;
+    const current = await tx.master_customer.findFirst({ where: { id: req.params.customerId, account_id: account.kode_account } });
     if (!current) return null;
     if (current.aktif) {
-      const active = await tx.master_customer.count({ where: { account_id: req.params.id, aktif: true } });
+      const active = await tx.master_customer.count({ where: { account_id: account.kode_account, aktif: true } });
       if (active <= 1) throw konflik("Customer aktif terakhir tidak dapat dinonaktifkan.");
     }
     return tx.master_customer.update({ where: { id: current.id }, data: { aktif: false } });

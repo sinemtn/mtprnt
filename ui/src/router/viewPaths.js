@@ -1,0 +1,22 @@
+export const viewPaths = {
+  dashboard: "/dashboard",
+  tiket: "/tiket",
+  suratTugasBaru: "/surat-tugas",
+  stokPrinter: "/stok/printer",
+  stokToner: "/stok/toner",
+  stokSparepart: "/stok/sparepart",
+  account: "/master-data/billing",
+  customer: "/master-data/customer",
+  printer: "/master-data/printer/unit",
+  printerKategori: "/master-data/printer/kategori",
+  printerModel: "/master-data/printer/model",
+  toner: "/master-data/toner",
+  sukuCadang: "/master-data/sparepart",
+  gudang: "/master-data/gudang",
+  pengguna: "/master-data/user",
+  audit: "/audit",
+  auditBarang: "/audit-barang",
+  rolePermission: "/pengaturan/role-permission",
+  pengaduan: "/arsip/komplain",
+  suratTugas: "/arsip/surat-tugas"
+};

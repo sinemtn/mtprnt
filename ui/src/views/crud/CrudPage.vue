@@ -54,9 +54,11 @@ defineEmits([
       <input
         :value="cari"
         type="search"
-        placeholder="Cari data"
+        :placeholder="currentConfig.searchPlaceholder || 'Cari kode atau nama'"
+        :aria-label="`Cari ${currentConfig.title}`"
         @input="$emit('update:cari', $event.target.value); $emit('reset-pagination')"
         @keyup.enter="$emit('load-page')"
+        @search="!$event.target.value && $emit('load-page')"
       />
     </label>
     <button v-if="canImport" class="secondary-button" type="button" @click="$emit('open-import')"><FileUp :size="16" /><span>Impor Excel</span></button>

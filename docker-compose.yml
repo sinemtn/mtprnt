@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-multiprint}
       POSTGRES_USER: ${POSTGRES_USER:-multiprint}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-multiprint123}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       TZ: Asia/Bangkok
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@multiprint.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin123}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Set PGADMIN_DEFAULT_PASSWORD in .env}
       PGADMIN_CONFIG_SERVER_MODE: "False"
       TZ: Asia/Bangkok
     ports:
@@ -42,9 +42,9 @@ services:
     container_name: service
     restart: unless-stopped
     environment:
-      PORT: ${SERVICE_PORT:-5000}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-multiprint}:${POSTGRES_PASSWORD:-multiprint123}@postgres:5432/${POSTGRES_DB:-multiprint}
-      JWT_SECRET: ${JWT_SECRET:-multiprint-dev-secret}
+      PORT: 5000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-multiprint}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${APP_DB:-multiprint_v2_clean}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
       TZ: Asia/Bangkok
     ports:
